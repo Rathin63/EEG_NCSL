@@ -234,7 +234,7 @@ class dataset:
             - a bidirectional (zero phase) IIR filter will be aplied for the
                 notch frequency.
             - for the high as wel as low pass filter a bidirectional (zero phase)
-                a 4rth orde Butterworth filter is applied.
+                a 4rth order Butterworth filter is applied.
             - order in which the filters are applied:
                 1. notch
                 2. hp
@@ -458,7 +458,7 @@ class dataset:
             -------------------------------------------------------------------
             The dataset object with the start and end sample of each artifact
             that was detected can be found in the artifact field. The start and
-            endsample of each artifact is kept in the artifacts field for later
+            end sample of each artifact is kept in the artifacts field for later
             removal.
         '''
 

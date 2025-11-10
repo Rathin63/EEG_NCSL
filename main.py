@@ -20,11 +20,11 @@ sys.path.insert(0, os.path.join(os.getcwd(), 'preprocessing', 'TDBRAIN'))
 from preprocessing.TDBRAIN.autopreprocessing import dataset as ds
 
 # Configuration
-PATIENT_ID = "sub-87974621_ses-1_task-restEC_eeg"  # Change this to your patient ID
+PATIENT_ID = "sub-88026949_ses-2_task-restEC_eeg"  # Change this to your patient ID
 DATA_PATH = "E:\\JHU_Postdoc\\Research\\TDBrain\\TD_BRAIN_code\\BRAIN_code\\Sample\\diff_data"  # Update with your data path
 OUTPUT_PATH = ".\\output"  # Where to save results
 
-# Create output directory
+# Create output directory (and any parents), but don’t crash if it already exists.
 Path(OUTPUT_PATH).mkdir(parents=True, exist_ok=True)
 
 print(f"Processing patient: {PATIENT_ID}")
@@ -57,7 +57,8 @@ else:
     print(f"Data shape: {eeg_data.data.shape}")
     print(f"Number of channels: {len(eeg_data.labels)}")
     print(f"Sampling frequency: {eeg_data.Fs} Hz")
-    print(f"Channel labels: {eeg_data.labels[:10]}...")  # Show first 10 channels
+    print(f"Duration: {eeg_data.data.shape[1] / eeg_data.Fs} seconds")
+    print(f"Channel labels: {eeg_data.labels[:]}...")  # Show first 10 channels
 
 # %% Section 3: Preprocessing
 print("\n" + "=" * 60)
@@ -110,13 +111,13 @@ print("SECTION 4: VISUALIZING PREPROCESSED DATA")
 print("=" * 60)
 
 # Segment data for visualization (10 second segments)
-# eeg_data.segment(trllength=10, remove_artifact='no')
+eeg_data.segment(trllength=20, remove_artifact='no')
 
 # Plot a sample of the preprocessed data
 fig, ax = plt.subplots(figsize=(15, 8))
 
 # Plot first few channels for 10 seconds
-n_channels_to_plot = max(5, len(eeg_data.labels))
+n_channels_to_plot = min(10, len(eeg_data.labels))
 time_vector = np.arange(eeg_data.data.shape[2]) / eeg_data.Fs
 
 for i in range(n_channels_to_plot):
@@ -153,7 +154,7 @@ print(f"Data for A matrix computation: {data_continuous.shape}")
 print(f"Channels: {n_channels}, Samples: {n_samples}")
 
 # Parameters for A matrix computation
-window_length = 0.15 #0.045  # 45ms window (from MATEO code)
+window_length = 0.5 #0.045  # 45ms window (from MATEO code)
 alpha = 1e-12  # Regularization parameter
 fs = eeg_data.Fs
 
@@ -172,75 +173,85 @@ def compute_A_matrix(X, alpha, n_channels):
     """
     nchns, T = X.shape
 
-    Z = X[:, 0:T - 1]
-    Y = X[:, 1:T]
+    Z = X[:, 0:T - 1] # Takes all columns except the last → represents data from time t to T−1 (past samples).
+    Y = X[:, 1:T] #Takes all columns except the first → represents data from time t+1 to T (future samples).
 
+    # Computes regularized autocovariance matrix of Z:  #Z @ Z.T gives covariance between channels;
+    # alpha * np.eye(nchns) adds diagonal regularization (ridge term) to ensure matrix invertibility.
     Z2 = Z @ Z.T + alpha * np.eye(nchns)
-    D = np.linalg.pinv(Z2)
-    D2 = Z.T @ D
-    A_hat = Y @ D2
 
+    #Computes the Moore–Penrose pseudo-inverse of the regularized covariance matrix Z2. This step is needed for numerical stability if Z2 is near-singular.
+    D = np.linalg.pinv(Z2)
+
+    D2 = Z.T @ D #This forms part of the regression solution (preparing to estimate the transition mapping).
+
+    A_hat = Y @ D2 #Computes the transition (connectivity) matrix:
+    # This gives how each channel’s next-time activity depends on all channels’ current activity.
+
+    #Returns the estimated A_hat, a square matrix of size (n_channels × n_channels)
+    # describing how each channel at time t influences every channel at time t + 1.
     return A_hat
 
 
 # Compute A matrices for all windows
-window_start = 0
-A_matrices = []
+window_start = 0 #Initializes starting index of the first time window.
+A_matrices = [] #Empty list to store A-matrices from each window.
 
-while window_start < (n_samples - window_length_samples):
-    X = data_continuous[:, window_start:window_start + window_length_samples]
+while window_start < (n_samples - window_length_samples): #Loop through the continuous data in chunks
+    X = data_continuous[:, window_start:window_start + window_length_samples] #Extracts one time window Shape: (n_channels, window_length_samples)
 
     # Standardize the data
-    mean_vec = np.mean(X, axis=1, keepdims=True)
-    X_centered = X - mean_vec
-    std_vec = np.std(X_centered, axis=1, keepdims=True)
+    mean_vec = np.mean(X, axis=1, keepdims=True)  #Computes mean of each channel (along time). Used for centering.
+    X_centered = X - mean_vec #makes each channel zero-mean within this window.
+    std_vec = np.std(X_centered, axis=1, keepdims=True) #Computes standard deviation of each channel.
     std_vec[std_vec == 0] = 1  # Avoid division by zero
 
     # Compute A matrix
-    A_hat = compute_A_matrix(X, alpha, n_channels)
-    A_matrices.append(A_hat)
+    A_hat = compute_A_matrix(X, alpha, n_channels) #Computes the transition (A) matrix for this window using the earlier routine.
+    A_matrices.append(A_hat) #Stores the A-matrix for this time window.
 
-    window_start += window_advance_samples
+    window_start += window_advance_samples #Moves the sliding window ahead by a fixed number of samples (defines overlap)
 
-A_matrices = np.array(A_matrices)
+A_matrices = np.array(A_matrices) #Converts the list to a 3-D NumPy array. Shape: (n_windows, n_channels, n_channels).
 A_matrices = np.transpose(A_matrices, (1, 2, 0))  # Shape: (n_channels, n_channels, n_windows)
 
 print(f"A matrices computed!")
 print(f"Shape: {A_matrices.shape}")
 print(f"Number of windows: {A_matrices.shape[2]}")
 
-# %% Section 5.5: Reconstruct Signal from A Matrices
+# %% Section 6: Reconstruct Signal from A Matrices
 print("\n" + "=" * 60)
-print("SECTION 5.5: RECONSTRUCTING SIGNAL")
+print("SECTION 6: RECONSTRUCTING SIGNAL")
 print("=" * 60)
 
 # Initialize reconstructed signal
-data_reconstructed = np.zeros_like(data_continuous)
+data_reconstructed = np.zeros_like(data_continuous) #data_continuous = eeg_data.data[0, :26, :]  # First 26 channels (EEG only, exclude EOG)
 
-n_windows = A_matrices.shape[2]  # ADD THIS LINE
-channel_labels = eeg_data.labels
+n_windows = A_matrices.shape[2]  #Total window count
+channel_labels = eeg_data.labels # channel labels
 
 print(f"Reconstructing signal using A matrices...")
 print(f"Window length: {window_length_samples} samples")
 print(f"Number of windows: {n_windows}")
 
 # Reconstruct signal window by window
-for win_idx in range(n_windows):
-    # Get the A matrix for this window
+for win_idx in range(n_windows): #Iterates over each window index, reconstructing one segment at a time.
+
     A = A_matrices[:, :, win_idx]
 
     # Define window boundaries
-    win_start = win_idx * window_length_samples
-    win_end = min((win_idx + 1) * window_length_samples, n_samples)
+    win_start = win_idx * window_length_samples #Starting sample index for this window.
+    win_end = min((win_idx + 1) * window_length_samples, n_samples) #Ending index for the window (ensures not to exceed total samples).
 
     # Set initial condition: first sample of this window from true signal
     data_reconstructed[:, win_start] = data_continuous[:, win_start]
 
     # Recursively reconstruct within this window: X(t+1) = A * X(t)
     for t in range(win_start + 1, win_end):
-        data_reconstructed[:, t] = A @ data_reconstructed[:, t - 1]
+        data_reconstructed[:, t] = A @ data_reconstructed[:, t - 1] #Use Current A Mat to get the next Sample. Recursively approximate the entire signal.
+        #X^(t+1) = A X^(t)
 
-    if (win_idx + 1) % 10 == 0:
+    if (win_idx + 1) % 10 == 0: #Every 10 windows, prints progress to monitor long runs.
         print(f"  Processed {win_idx + 1}/{n_windows} windows...")
 
 print(f"Signal reconstruction complete!")
@@ -252,9 +263,112 @@ print(f"\nReconstruction Quality:")
 print(f"  Mean Squared Error: {mse:.2e}")
 print(f"  Correlation: {correlation:.4f}")
 
-# %% Section 5.6: Visualize Original vs Reconstructed Signal
+# Suppose:
+# data_continuous: (n_channels, n_samples)
+# data_reconstructed: (n_channels, n_samples)
+# window_length_samples, window_advance_samples already defined
+
+n_channels, n_samples = data_continuous.shape
+
+# Define window starts (same as in reconstruction)
+window_starts = np.arange(0, n_samples - window_length_samples + 1, window_advance_samples)
+n_windows = len(window_starts)
+
+# Initialize R² array
+R2_values = np.zeros((n_channels, n_windows))
+MSE_values = np.zeros((n_channels, n_windows))
+
+for w, start in enumerate(window_starts):
+    end = start + window_length_samples
+
+    # Extract segment for this window
+    Y_true = data_continuous[:, start:end]
+    Y_pred = data_reconstructed[:, start:end]
+
+    # Mean Squared Error (per channel)
+    mse = np.mean((Y_true - Y_pred) ** 2, axis=1)
+    MSE_values[:, w] = mse
+
+    # Compute per-channel R²
+    ss_res = np.sum((Y_true - Y_pred) ** 2, axis=1)
+    ss_tot = np.sum((Y_true - np.mean(Y_true, axis=1, keepdims=True)) ** 2, axis=1)
+    R2_values[:, w] = 1 - (ss_res / ss_tot)
+
+# ---- Create side-by-side subplots ----
+fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=False)
+
+# ---- Left subplot: MSE ----
+for ch in range(n_channels):
+    axes[0].scatter(
+        np.full(n_windows, ch+1),
+        MSE_values[ch, :],
+        color='tab:orange',
+        alpha=0.6,
+        s=25
+    )
+
+axes[0].set_xlabel("Channels")
+axes[0].set_ylabel("MSE across windows")
+axes[0].set_title("Channel-wise Reconstruction Error (MSE)")
+axes[0].set_xticks(range(1, n_channels+1))
+axes[0].set_xticklabels(eeg_data.labels[:26])
+#axes[0].set_xticklabels([f"Ch{i+1}" for i in range(n_channels)])
+axes[0].grid(True, axis='y', linestyle='--', alpha=0.6)
+axes[0].set_yscale('log')  # optional, use if MSE varies widely
+
+# ---- Right subplot: R² ----
+for ch in range(n_channels):
+    axes[1].scatter(
+        np.full(n_windows, ch+1),
+        R2_values[ch, :],
+        color='tab:blue',
+        alpha=0.6,
+        s=25
+    )
+
+axes[1].set_xlabel("Channels")
+axes[1].set_ylabel("R² across windows")
+axes[1].set_title("Channel-wise Reconstruction Quality (R²)")
+axes[1].set_xticks(range(1, n_channels+1))
+axes[1].set_xticklabels(eeg_data.labels[:26])
+#axes[1].set_xticklabels([f"Ch{i+1}" for i in range(n_channels)])
+axes[1].grid(True, axis='y', linestyle='--', alpha=0.6)
+
+plt.tight_layout()
+plt.show()
+
+
+# # ---- Plot after loop ----
+# plt.figure(figsize=(10,5))
+# plt.boxplot(
+#     MSE_values.T,
+#     labels=[f"Ch{i+1}" for i in range(n_channels)],
+#     showfliers=False
+# )
+# plt.xlabel("Channels")
+# plt.ylabel("MSE across all windows")
+# plt.title("Channel-wise Reconstruction Error (MSE)")
+# plt.grid(True, axis='y', linestyle='--', alpha=0.6)
+# plt.tight_layout()
+# plt.show()
+#
+# # Optional: also show R² boxplot
+# plt.figure(figsize=(10,5))
+# plt.boxplot(
+#     R2_values.T,
+#     labels=[f"Ch{i+1}" for i in range(n_channels)],
+#     showfliers=False
+# )
+# plt.xlabel("Channels")
+# plt.ylabel("R² across all windows")
+# plt.title("Channel-wise Reconstruction Quality (R²)")
+# plt.grid(True, axis='y', linestyle='--', alpha=0.6)
+# plt.tight_layout()
+# plt.show()
+
+# %% Section 7: Visualize Original vs Reconstructed Signal
 print("\n" + "=" * 60)
-print("SECTION 5.6: VISUALIZING RECONSTRUCTION")
+print("SECTION 7: VISUALIZING RECONSTRUCTION")
 print("=" * 60)
 
 # Select channels to plot
@@ -333,9 +447,11 @@ print(f"\nPer-channel correlations:")
 for ch in channels_to_plot:
     ch_corr = np.corrcoef(data_continuous[ch, :], data_reconstructed[ch, :])[0, 1]
     # print(f"  {channel_labels[ch]}: {ch_corr:.4f}")
-# %% Section 6: Compute Sink Indices
+
+
+# %% Section 8: Compute Sink Indices
 print("\n" + "="*60)
-print("SECTION 6: COMPUTING SINK INDICES")
+print("SECTION 8: COMPUTING SINK INDICES")
 print("="*60)
 
 # Import the identifySS function from utils
@@ -367,9 +483,9 @@ print(f"\nOverall Statistics:")
 print(f"  Top sink channel: {eeg_data.labels[np.argmax(overall_sink)]} (index: {np.max(overall_sink):.4f})")
 print(f"  Top source channel: {eeg_data.labels[np.argmax(overall_source)]} (index: {np.max(overall_source):.4f})")
 
-# %% Section 7: Visualize Sink Index Heatmap
+# %% Section 9: Visualize Sink Index Heatmap
 print("\n" + "=" * 60)
-print("SECTION 7: VISUALIZING SINK INDEX HEATMAP")
+print("SECTION 9: VISUALIZING SINK INDEX HEATMAP")
 print("=" * 60)
 
 # Sort channels by mean sink index
@@ -415,9 +531,9 @@ print("\n" + "=" * 60)
 print("PIPELINE COMPLETE!")
 print("=" * 60)
 
-# %% Section 8: Visualize Sink Index Topomap
+# %% Section 10: Visualize Sink Index Topomap
 print("\n" + "="*60)
-print("SECTION 8: VISUALIZING SINK INDEX TOPOMAP")
+print("SECTION 10: VISUALIZING SINK INDEX TOPOMAP")
 print("="*60)
 
 import mne
