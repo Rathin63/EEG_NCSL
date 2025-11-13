@@ -96,7 +96,7 @@ for file_idx, file_name in enumerate(csv_files, start=1):
 
     # Apply filters (notch, highpass, lowpass)
     print("Applying filters...")
-    eeg_data.apply_filters(hpfreq=0.5, lpfreq=100, notchfreq=50)
+    eeg_data.apply_filters(hpfreq=0.5, lpfreq=48, notchfreq=50)
 
     # Correct EOG artifacts
     print("Correcting EOG artifacts...")
@@ -244,7 +244,7 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     print(f"Shape: {A_matrices.shape}")
     print(f"Number of windows: {A_matrices.shape[2]}")
 
-# %% Section 5: Reconstruct Signal from A Matrices
+# %% Section 5: Signal Reconstruction
     print("\n" + "=" * 60)
     print("SECTION 5: RECONSTRUCTING SIGNAL")
     print("=" * 60)
@@ -392,7 +392,6 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     # plt.grid(True, axis='y', linestyle='--', alpha=0.6)
     # plt.tight_layout()
     # plt.show()
-
 
 # %% Section 6: Visualize Original vs Reconstructed Signal
     print("\n" + "=" * 60)
@@ -559,7 +558,7 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     print("PIPELINE COMPLETE!")
     print("=" * 60)
 
-    # %% Section 9: Visualize Sink Index Topomap
+# %% Section 9: Visualize Sink Index Topomap
     print("\n" + "="*60)
     print("SECTION 9: VISUALIZING SINK INDEX TOPOMAP")
     print("="*60)
@@ -625,4 +624,3 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     print(f"\n✅ Completed {file_idx}/{len(csv_files)} "
           f"({(file_idx / len(csv_files)) * 100:.1f}%) files. "
           f"Results saved in: {OUTPUT_PATH}\n")
-
