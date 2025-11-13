@@ -168,7 +168,7 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     print("=" * 60)
 
     # Re-segment data to continuous (all data in one segment)
-    # eeg_data.segment(trllength='all', remove_artifact='no')
+    eeg_data.segment(trllength='all', remove_artifact='no')
 
     # Extract continuous data
     data_continuous = eeg_data.data[0, :26, :]  # First 26 channels (EEG only, exclude EOG)
@@ -180,7 +180,7 @@ for file_idx, file_name in enumerate(csv_files, start=1):
 
     # Parameters for A matrix computation
     window_length = 0.5 #0.045  # 45ms window (from MATEO code)
-    alpha = 1e-12  # Regularization parameter
+    alpha = 1e-6  # Regularization parameter
     fs = eeg_data.Fs
 
     window_length_samples = int(fs * window_length)
