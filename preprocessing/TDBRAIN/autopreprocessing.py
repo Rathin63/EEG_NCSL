@@ -889,11 +889,37 @@ class dataset:
         else:
             self.info['data quality'] = 'OK'
 
-        Och = np.squeeze(np.where(np.array(self.labels) == 'O2')[0])
+        # --- Insert artifacts row as LAST ROW (correct behavior) ---
         self.trl = np.array([0, self.data.shape[-1]], dtype=int)
-        self.data = np.vstack((self.data[:Och + 1, :], artsamples, self.data[Och + 1:, :]))
-        self.labels = np.hstack((self.labels[:Och + 1], 'artifacts', self.labels[Och + 1:]))
+
+        # Append artifact samples as the last channel
+        self.data = np.vstack((self.data, artsamples))
+        self.labels = np.hstack((self.labels, 'artifacts'))
+
         self.info['no. segments'] = 0
+
+    def remove_artifacts(self, remove_art=False):
+        # Remove artifact samples if requested
+        if remove_art and 'artifacts' in self.labels:
+            artidx = np.where(self.labels == 'artifacts')[0]
+            if len(artidx) > 0 and artidx[0] < self.data.shape[0]:
+                artifact_mask = self.data[artidx[0], :] == 1
+                clean_mask = ~artifact_mask
+
+                # Statistics before removal
+                n_samples = self.data.shape[1]
+                artifact_percent = np.mean(artifact_mask) * 100
+
+                print(f"\n🧹 Removing artifacts:")
+                print(f"  Removing: {np.sum(artifact_mask) / self.Fs:.1f}s ({artifact_percent:.1f}%)")
+                print(f"  Keeping: {np.sum(clean_mask) / self.Fs:.1f}s ({100 - artifact_percent:.1f}%)")
+
+                # Remove artifact samples from all channels
+                self.data = self.data[:, clean_mask]
+
+                # Remove artifact row from labels and data
+                self.data = np.delete(self.data, artidx[0], axis=0)
+                self.labels = np.delete(self.labels, artidx[0])
 
     def segment(self, marking='no', trllength=2, remove_artifact='no'):
         '''

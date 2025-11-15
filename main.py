@@ -123,13 +123,44 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     eeg_data.residual_eyeblinks()
 
     # Define and mark artifacts
-    print("Defining artifacts...")
     eeg_data.define_artifacts()
+
+    # Option 1: Remove artifacts
+    print("Before removal:", eeg_data.data.shape)
+    print("Opted for Artifact Removal..")
+    print("Defining artifacts...")
+    eeg_data.remove_artifacts(remove_art=True)
+    print("After removal:", eeg_data.data.shape)
+
+
+    # Option 2: Keep artifacts
+    #eeg_data.remove_artifacts(remove_art=False)
+    #print("Not Opted for Artifact Removal..")
+
+    # After define_artifacts()
+    if 'artifacts' in eeg_data.labels:
+        artidx = np.where(eeg_data.labels == 'artifacts')[0]
+        if len(artidx) > 0 and artidx[0] < eeg_data.data.shape[0]:
+            # FIX: data is 2D (channels, samples), not 3D
+            artifact_mask = eeg_data.data[artidx[0], :] == 1  # Removed [0] indexing
+            artifact_percent = np.mean(artifact_mask) * 100
+
+            n_samples = eeg_data.data.shape[1]
+            fs = eeg_data.Fs
+
+            print(f"\n📊 Artifact Statistics:")
+            print(f"  Total duration: {n_samples / fs:.1f}s")
+            print(f"  Artifact duration: {np.sum(artifact_mask) / fs:.1f}s ({artifact_percent:.1f}%)")
+            print(f"  Clean duration: {np.sum(~artifact_mask) / fs:.1f}s ({100 - artifact_percent:.1f}%)")
+
+            if artifact_percent > 30:
+                print("  ⚠️ Warning: >30% artifacts - consider excluding artifact windows")
+            else:
+                print("  ✅ Artifact level acceptable for continuous analysis")
 
     print(f"Preprocessing complete!")
     print(f"Data quality: {eeg_data.info.get('data quality', 'Unknown')}")
     print(f"Repaired channels: {eeg_data.info.get('repaired channels', 'None')}")
-
 # %% Section 3: Display Preprocessed Data
     print("\n" + "=" * 60)
     print("SECTION 3: VISUALIZING PREPROCESSED DATA")
@@ -168,7 +199,7 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     print("=" * 60)
 
     # Re-segment data to continuous (all data in one segment)
-    eeg_data.segment(trllength='all', remove_artifact='no')
+    #eeg_data.segment(trllength='all', remove_artifact='no')
 
     # Extract continuous data
     data_continuous = eeg_data.data[0, :26, :]  # First 26 channels (EEG only, exclude EOG)
