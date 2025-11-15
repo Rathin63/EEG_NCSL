@@ -4,7 +4,7 @@
 EEG Processing Pipeline: Load, Preprocess, Compute A matrices, and Visualize Sink Indices
 """
 
-# %% Section 1: Imports and Setup
+# %% Section 0: Imports and Setup
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(os.getcwd(), 'preprocessing', 'TDBRAIN'))
 
 from preprocessing.TDBRAIN.autopreprocessing import dataset as ds
 
-# Configuration
+# Input and Output Path
 DATA_PATH = r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Sample\diff_data2"
 BATCH_OUTPUT_PATH = r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Batch_Outputs"
 
@@ -141,13 +141,13 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     # Plot a sample of the preprocessed data
     fig, ax = plt.subplots(figsize=(15, 8))
 
-    # Plot first few channels for 10 seconds
-    n_channels_to_plot = min(10, len(eeg_data.labels))
+    # Plot first few channels for 5 seconds
+    n_channels_to_plot = min(5, len(eeg_data.labels))
     time_vector = np.arange(eeg_data.data.shape[2]) / eeg_data.Fs
 
     for i in range(n_channels_to_plot):
         # Plot first trial, offset each channel
-        offset = i * 50  # Adjust offset for better visualization
+        offset = i * 100  # Adjust offset for better visualization
         ax.plot(time_vector, eeg_data.data[0, i, :] + offset, label=eeg_data.labels[i])
 
     ax.set_xlabel('Time (s)')
