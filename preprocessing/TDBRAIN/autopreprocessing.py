@@ -1060,10 +1060,16 @@ class dataset:
             self.info['no. segments'] = len(self.trl) - 1
             self.arttrl = [0]
             if trllength == 'all':
-                if len(p) > (0.33 * totallength):
-                    self.info['data quality'] = 'bad'
+                # Only check 'p' if artifacts channel still exists
+                if 'artifacts' in self.labels:
+                    if len(p) > (0.33 * totallength):
+                        self.info['data quality'] = 'bad'
+                    else:
+                        self.info['data quality'] = 'OK'
                 else:
+                    # No artifacts channel → samples likely already cleaned
                     self.info['data quality'] = 'OK'
+
             elif self.info['no. segments'] < (0.33 * (totallength / (epochlength * self.Fs))):
                 self.info['data quality'] = 'bad'
 
