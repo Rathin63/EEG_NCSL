@@ -5,11 +5,25 @@ EEG Processing Pipeline: Load, Preprocess, Compute A matrices, and Visualize Sin
 """
 
 # %% Section 0: Imports and Setup
+# ==== GLOBAL IMPORTS ====
+
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
+import pandas as pd
 import os
 from pathlib import Path
+import seaborn as sns
+
+# Matplotlib (batch-safe)
+import matplotlib
+matplotlib.use("Agg")   # Important for batch mode!
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+
+# MNE and other libraries
+import mne
+import scipy
+from scipy.signal import welch
+
 
 # Import preprocessing modules
 import sys
@@ -162,8 +176,6 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     print("SECTION 2B: BAND POWER ANALYSIS (STANDARDIZED)")
     print("=" * 60)
 
-    from scipy.signal import welch
-
     # Extract EEG data (first 26 channels)
     data_clean = eeg_data.data[:26, :]  # channels x samples
     fs = eeg_data.Fs
@@ -237,9 +249,6 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     print("SECTION 2D: PSD + BAND POWER DIAGRAM")
     print("=" * 60)
 
-    import matplotlib.pyplot as plt
-    from scipy.signal import welch
-
     # Compute mean PSD across channels
     psd_list = []
 
@@ -308,7 +317,6 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     # -------------------------------
     # Add legend for EEG bands
     # -------------------------------
-    import matplotlib.patches as mpatches
 
     legend_patches = []
     for band in band_names:
@@ -618,7 +626,6 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     # ---------------------------------------------------------
     # PART E: HISTOGRAM
     # ---------------------------------------------------------
-    import matplotlib.pyplot as plt
 
     plt.figure(figsize=(8, 5))
     plt.hist(corr_check, bins=20, edgecolor='black')
@@ -1047,8 +1054,6 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     print("SECTION 9: VISUALIZING SINK INDEX TOPOMAP")
     print("="*60)
 
-    import mne
-
     # Calculate mean sink index over entire recording
     mean_sink_index = np.mean(sink_indices, axis=1)
 
@@ -1244,6 +1249,7 @@ for file_idx, file_name in enumerate(csv_files, start=1):
 
     # Add this subject to batch results
     results.append(result_entry)
+    plt.close('all')
 
     # results.append({
     #     "ID": PATIENT_ID,
@@ -1261,7 +1267,6 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     #     # add all 10–12 metrics here
     # })
 
-import pandas as pd
 df = pd.DataFrame(results)
 
 # Ensure batch-level output file goes to BATCH_OUTPUT_PATH
