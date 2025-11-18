@@ -35,55 +35,49 @@ print(f"\nFound {len(csv_files)} CSV files for processing:\n")
 for f in csv_files:
     print(f"  - {f}")
 
+results = []
+
 # Loop through all CSVs
 for file_idx, file_name in enumerate(csv_files, start=1):
     PATIENT_ID = Path(file_name).stem
     print("\n" + "="*80)
-    print(f"Processing patient: {PATIENT_ID}")
+    print(f"Preprocessing Subject: {PATIENT_ID}")
     print("="*80)
 
     # 🔹 Create per-subject output folder
     OUTPUT_PATH = os.path.join(BATCH_OUTPUT_PATH, PATIENT_ID)
     Path(OUTPUT_PATH).mkdir(parents=True, exist_ok=True)
 
+    # Full file path
     eeg_file = os.path.join(DATA_PATH, file_name)
-    eeg_data = ds(eeg_file)
-    eeg_data.loaddata()
-
-    print(f"Data loaded successfully!")
-    print(f"Shape: {eeg_data.data.shape}")
-    print(f"Sampling frequency: {eeg_data.Fs} Hz")
-    print(f"Channels: {len(eeg_data.labels)}")
-
 
 # %% Section 1: Load Raw Data
     print("\n" + "=" * 60)
     print("SECTION 1: LOADING RAW DATA")
     print("=" * 60)
 
-    # Construct file path (adjust based on your file structure)
-    # Assuming .csv format, modify if using .edf
-    eeg_file = os.path.join(DATA_PATH, f"{PATIENT_ID}.csv")
-
-    # Check if file exists
+    # File existence check (single, correct place)
     if not os.path.exists(eeg_file):
         print(f"ERROR: File not found: {eeg_file}")
-        print("Please update DATA_PATH and PATIENT_ID")
-    else:
-        print(f"Loading data from: {eeg_file}")
+        print("Skipping...")
+        continue
 
-        # Initialize dataset object
-        eeg_data = ds(eeg_file)
+    print(f"Loading data from: {eeg_file}")
 
-        # Load the data
-        eeg_data.loaddata()
+    # Load dataset
+    eeg_data = ds(eeg_file)
+    eeg_data.loaddata()
 
-        print(f"Data loaded successfully!")
-        print(f"Data shape: {eeg_data.data.shape}")
-        print(f"Number of channels: {len(eeg_data.labels)}")
-        print(f"Sampling frequency: {eeg_data.Fs} Hz")
-        print(f"Duration: {eeg_data.data.shape[1] / eeg_data.Fs} seconds")
-        print(f"Channel labels: {eeg_data.labels[:]}...")  # Show first 10 channels
+    # Basic info
+    print(f"Data loaded successfully!")
+    print(f"Shape: {eeg_data.data.shape}")
+    print(f"Sampling frequency: {eeg_data.Fs} Hz")
+    print(f"Channels: {len(eeg_data.labels)}")
+    print(f"Channel labels: {eeg_data.labels[:]}...")  # Show first 10 channels
+
+    # Duration (if needed)
+    orig_duration = eeg_data.data.shape[1] / eeg_data.Fs
+    print(f"Original duration: {orig_duration:.2f} sec")
 
 # %% Section 2: Preprocessing
     print("\n" + "=" * 60)
@@ -131,10 +125,12 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     print("Defining artifacts...")
     eeg_data.remove_artifacts(remove_art=True)
     print("EEG Shape After removal:", eeg_data.data.shape)
+    clean_duration = eeg_data.data.shape[1] / eeg_data.Fs # Result---2
 
     # Option 2: Keep artifacts #TODO Add a helper function here later
     # eeg_data.remove_artifacts(remove_art=False)
     # print("Not Opted for Artifact Removal..")
+    # clean_duration = eeg_data.data.shape[1] / eeg_data.Fs # Result---2
 
     # After define_artifacts()
     if 'artifacts' in eeg_data.labels:
@@ -179,7 +175,7 @@ for file_idx, file_name in enumerate(csv_files, start=1):
         "theta": (4, 8),
         "alpha": (8, 13),
         "beta": (13, 30),
-        "gamma": (30, 48)
+        "gamma": (30, 48)  # FULL gamma instead of clipped at 48 Hz
     }
 
     # Containers
@@ -223,14 +219,18 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     print("Band power (absolute, %, and TBR) computation complete!\n")
 
     # ---------------------- Summaries ---------------------------
+    rel_band = {}
 
     print("Average % Band Powers Across Channels:")
     for band_name in bands:
+        value = np.mean(band_power_percent[band_name])
+        rel_band[band_name] = value  # store the result
         print(f"  {band_name.capitalize():6s}: {np.mean(band_power_percent[band_name]):.2f}%")
 
     print("\nTheta/Beta Ratio (TBR):")
     print(f"  Mean TBR: {np.nanmean(TBR):.3f}")
     print(f"  TBR range: [{np.nanmin(TBR):.3f}, {np.nanmax(TBR):.3f}]")
+    mean_TBR_val = np.nanmean(TBR) # Result---3
 
     # %% Section 2C: Combined PSD + Band Power Diagram
     print("\n" + "=" * 60)
@@ -369,8 +369,8 @@ for file_idx, file_name in enumerate(csv_files, start=1):
         fontsize=15, fontweight='bold'
     )
 
-    plt.show()
     plt.savefig(os.path.join(OUTPUT_PATH, f'{PATIENT_ID}_band_composition.png'), dpi=150)
+    plt.show()
 
     # %% Section 3: Display Preprocessed Data
     print("\n" + "=" * 60)
@@ -380,29 +380,29 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     # Segment data for visualization (10 second segments)
     eeg_data.segment(trllength='all', remove_artifact='no')#ToDo Add a copy of eeg_data here to plot only first few seconds
 
-    # Plot a sample of the preprocessed data
-    fig, ax = plt.subplots(figsize=(15, 8))
-
-    # Plot first few channels for 5 seconds
-    n_channels_to_plot = min(5, len(eeg_data.labels))
-    time_vector = np.arange(eeg_data.data.shape[2]) / eeg_data.Fs
-
-    for i in range(n_channels_to_plot):
-        # Plot first trial, offset each channel
-        offset = i * 100  # Adjust offset for better visualization
-        ax.plot(time_vector, eeg_data.data[0, i, :] + offset, label=eeg_data.labels[i])
-
-    ax.set_xlabel('Time (s)')
-    ax.set_ylabel('Amplitude (μV)')
-    ax.set_title(f'Preprocessed EEG Data - {PATIENT_ID}')
-    ax.legend(loc='upper right')
-    ax.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    #plt.savefig(os.path.join(OUTPUT_PATH, f'{PATIENT_ID}_preprocessed_sample.png'), dpi=150)
-    plt.show()
-
-    print(f"Sample plot saved to: {OUTPUT_PATH}")
+    # # Plot a sample of the preprocessed data
+    # fig, ax = plt.subplots(figsize=(15, 8))
+    #
+    # # Plot first few channels for 5 seconds
+    # n_channels_to_plot = min(5, len(eeg_data.labels))
+    # time_vector = np.arange(eeg_data.data.shape[2]) / eeg_data.Fs
+    #
+    # for i in range(n_channels_to_plot):
+    #     # Plot first trial, offset each channel
+    #     offset = i * 100  # Adjust offset for better visualization
+    #     ax.plot(time_vector, eeg_data.data[0, i, :] + offset, label=eeg_data.labels[i])
+    #
+    # ax.set_xlabel('Time (s)')
+    # ax.set_ylabel('Amplitude (μV)')
+    # ax.set_title(f'Preprocessed EEG Data - {PATIENT_ID}')
+    # ax.legend(loc='upper right')
+    # ax.grid(True, alpha=0.3)
+    #
+    # plt.tight_layout()
+    # #plt.savefig(os.path.join(OUTPUT_PATH, f'{PATIENT_ID}_preprocessed_sample.png'), dpi=150)
+    # plt.show()
+    #
+    # print(f"Sample plot saved to: {OUTPUT_PATH}")
 
 # %% Section 4: Compute A Matrices
     print("\n" + "=" * 60)
@@ -485,15 +485,14 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     print("SECTION 5: RECONSTRUCTING SIGNAL")
     print("=" * 60)
 
+    n_windows = A_matrices.shape[2]  #Total window count
+    channel_labels = eeg_data.labels # channel labels
+
     # Initialize reconstructed signal
     data_reconstructed = np.zeros_like(data_continuous) #data_continuous = eeg_data.data[0, :26, :]  # First 26 channels (EEG only, exclude EOG)
     data_reconstructed_good = np.full_like(data_continuous, np.nan, dtype=float)
     data_continuous_good = np.full_like(data_continuous, np.nan, dtype=float)
     window_correlations = np.zeros(n_windows)  # Initializing an array for window wise correlation
-
-
-    n_windows = A_matrices.shape[2]  #Total window count
-    channel_labels = eeg_data.labels # channel labels
 
     print(f"Reconstructing signal using A matrices...")
     print(f"Window length: {window_length_samples} samples")
@@ -566,6 +565,7 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     print(f"\n=== Window Quality Summary ===")
     print(f"Good windows (>= {threshold}): {n_good}/{n_total} = {percent_good:.2f}%")
     print(f"Bad windows (< {threshold}): {n_bad}/{n_total} = {percent_bad:.2f}%")
+    effective_duration = n_good * (window_length_samples / fs)
 
     # --- Keep A matrices for good windows only (for final analysis) ---
     A_good = A_matrices[:, :, good_mask]  # filtered A matrices
@@ -895,7 +895,7 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     print("Computing sink and source indices for each window...")
 
     for i in range(n_windows):
-        sink_idx, source_idx, row_rank, col_rank = identifySS(A_matrices[:, :, i])
+        sink_idx, source_idx, row_rank, col_rank = identifySS(A_matrices[:, :, i]) #TODO: Normalize so 0 --> 1
         sink_indices[:, i] = sink_idx
         source_indices[:, i] = source_idx
         row_ranks[:, i] = row_rank
@@ -910,6 +910,7 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     print(f"\nOverall Statistics:")
     print(f"  Top sink channel: {eeg_data.labels[np.argmax(overall_sink)]} (index: {np.max(overall_sink):.4f})")
     print(f"  Top source channel: {eeg_data.labels[np.argmax(overall_source)]} (index: {np.max(overall_source):.4f})")
+
 
     # %% Section 7B: Compute Sink Indices (GOOD Windows Only)
     print("\n" + "=" * 60)
@@ -1164,4 +1165,131 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     top_sink_good_idx = np.argsort(mean_sink_index_good)[::-1][:5]
     for i, ch_idx in enumerate(top_sink_good_idx):
         print(f"  {i + 1}. {ch_names[ch_idx]}: {mean_sink_index_good[ch_idx]:.4f}")
+
+
+    # ============================================
+    # SECTION X: SUMMARY METRICS FOR EXCEL EXPORT
+    # ============================================
+
+    # ---------- Safe helpers ----------
+    def safe_topk(arr, labels, k=2):
+        """Return top-k indices, labels, and values from a 1D array."""
+        if arr.size == 0 or np.all(np.isnan(arr)):
+            return [], [], []
+        idx_sorted = np.argsort(arr)[::-1]
+        idx_top = idx_sorted[:k]
+        labels_top = [labels[i] for i in idx_top]
+        values_top = [arr[i] for i in idx_top]
+        return idx_top, labels_top, values_top
+
+
+    # ==================================================
+    # 1) Mean Sink Index (ALL windows)
+    # ==================================================
+    mean_sink_all = np.mean(sink_indices, axis=1)
+
+    # top–2 sinks (all windows)
+    sink_idx_all, sink_label_all, sink_val_all = safe_topk(mean_sink_all, ch_names, k=2)
+
+    # top–2 sources (all windows)
+    mean_source_all = np.mean(source_indices, axis=1)
+    source_idx_all, source_label_all, source_val_all = safe_topk(mean_source_all, ch_names, k=2)
+
+    # ==================================================
+    # 2) Mean Sink Index (GOOD windows only)
+    # ==================================================
+    mean_sink_good = np.mean(sink_indices_good, axis=1)
+
+    # top–2 sink (good only)
+    sink_idx_good, sink_label_good, sink_val_good = safe_topk(mean_sink_good, ch_names, k=2)
+
+    # top–2 source (good only)
+    mean_source_good = np.mean(source_indices_good, axis=1)
+    source_idx_good, source_label_good, source_val_good = safe_topk(mean_source_good, ch_names, k=2)
+
+    # ==================================================
+    # 3) Build result dictionary for this subject
+    # ==================================================
+    # ==================================================
+    # CLEAN SUMMARY RESULT ENTRY (MATCHES RIGHT COLUMN)
+    # ==================================================
+
+    result_entry = {
+        "ID": PATIENT_ID,
+        "Original Duration": orig_duration,
+        "Clean Duration": clean_duration,
+        "Effective Duration": effective_duration,  # you already compute this earlier
+        "TBR": mean_TBR_val,
+
+        # ===== Band Power % =====
+        "delta": rel_band.get("delta"),
+        "theta": rel_band.get("theta"),
+        "alpha": rel_band.get("alpha"),
+        "beta": rel_band.get("beta"),
+        "gamma": rel_band.get("gamma"),
+
+        # ===== Good SS Analysis % =====
+        "Mean Sink Index (Good)": float(np.nanmean(mean_sink_good)),
+        "Mean Source Index (Good)": float(np.nanmean(mean_source_good)),
+        "Top Sink Ch 1,2 (Good)": ", ".join(sink_label_good[:2]) if sink_label_good else None,
+        "Top Source Ch 1,2 (Good)": ", ".join(source_label_good[:2]) if source_label_good else None,
+
+        # ===== Good SS Analysis % =====
+        "Mean Sink Index (All)": float(np.nanmean(mean_sink_all)),
+        "Mean Source Index (All)": float(np.nanmean(mean_source_all)),
+        "Top Sink Ch 1,2 (All)": ", ".join(sink_label_all[:2]) if sink_label_all else None,
+        "Top Source Ch 1,2 (All)": ", ".join(source_label_all[:2]) if source_label_all else None,
+
+    }
+
+    # Add this subject to batch results
+    results.append(result_entry)
+
+    # results.append({
+    #     "ID": PATIENT_ID,
+    #     "Original Duration": orig_duration,
+    #     "Clean Duration": clean_duration,
+    #     "TBR": mean_TBR_val,
+    #     **rel_band,  # expands alpha=value, beta=value, ...
+    #     "Good Window Percent": percent_good,
+    #     "Sink Index": overall_sink,
+    #     "Source Index": overall_source,
+    #     "Good Sink Index": overall_sink_good,
+    #     "Good Source Index": overall_source_good,
+    #     "Top five Sink": top_sink_idx,
+    #     "Top Good five Sink": top_sink_good_idx,
+    #     # add all 10–12 metrics here
+    # })
+
+import pandas as pd
+df = pd.DataFrame(results)
+
+# Ensure batch-level output file goes to BATCH_OUTPUT_PATH
+batch_excel_path = os.path.join(BATCH_OUTPUT_PATH, "BatchSummary.xlsx")
+
+df.to_excel(batch_excel_path, index=False)
+# --- Auto-adjust Excel column widths ---
+from openpyxl import load_workbook
+
+wb = load_workbook(batch_excel_path)
+ws = wb.active
+
+for column_cells in ws.columns:
+    max_length = 0
+    col_letter = column_cells[0].column_letter
+
+    for cell in column_cells:
+        try:
+            cell_value = str(cell.value)
+        except:
+            cell_value = ""
+        if cell_value:
+            max_length = max(max_length, len(cell_value))
+
+    ws.column_dimensions[col_letter].width = max_length + 2   # padding
+
+wb.save(batch_excel_path)
+
+
+print(f"\nBatch summary saved to:\n{batch_excel_path}")
 
