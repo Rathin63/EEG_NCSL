@@ -1171,6 +1171,61 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     for i, ch_idx in enumerate(top_sink_good_idx):
         print(f"  {i + 1}. {ch_names[ch_idx]}: {mean_sink_index_good[ch_idx]:.4f}")
 
+    # ================================
+    # REGION DEFINITIONS (FT vs CPO)
+    # ================================
+
+    frontotemporal_labels = [
+        "Fp1", "Fp2",
+        "F7", "F3", "Fz", "F4", "F8",
+         "T7", "T8"
+    ]
+
+    centro_parieto_occipital_labels = [
+        "C3", "Cz", "C4",
+        "CP3", "CPZ", "CP4",
+        "P7", "P3", "Pz", "P4", "P8",
+        "O1", "OZ","O2"
+    ]
+
+
+    def roi_mean(arr, labels, roi):
+        idx = [labels.index(ch) for ch in roi if ch in labels]
+        if len(idx) == 0:
+            return np.nan
+        return float(np.nanmean(arr[idx]))
+
+    # Map channel names to indices
+    label_to_idx = {ch: i for i, ch in enumerate(ch_names)}
+
+    # Get FT and CPO channel indices
+    FT_idx = [label_to_idx[ch] for ch in frontotemporal_labels if ch in label_to_idx]
+    CPO_idx = [label_to_idx[ch] for ch in centro_parieto_occipital_labels if ch in label_to_idx]
+
+    # Extract region-wise sink values
+    sink_FT = mean_sink_index[FT_idx]
+    sink_CPO = mean_sink_index[CPO_idx]
+
+    from preprocessing.utils.entropy_utils import spatial_entropy
+    H_total = spatial_entropy(mean_sink_index)
+    H_FT = spatial_entropy(sink_FT)
+    H_CPO = spatial_entropy(sink_CPO)
+    H_ratio = H_FT / H_CPO if H_CPO > 0 else np.nan
+
+    # ----------------------------------------------
+    # ENTROPY METRICS FOR GOOD WINDOWS ONLY
+    # ----------------------------------------------
+    # mean_sink_index_good already exists
+    # Compute region-wise GOOD-window SI
+    sink_FT_good = mean_sink_index_good[FT_idx]
+    sink_CPO_good = mean_sink_index_good[CPO_idx]
+
+    # GOOD-window entropies
+    H_total_good = spatial_entropy(mean_sink_index_good)
+    H_FT_good = spatial_entropy(sink_FT_good)
+    H_CPO_good = spatial_entropy(sink_CPO_good)
+    H_ratio_good = H_FT_good / H_CPO_good if H_CPO_good > 0 else np.nan
+
 
     # ============================================
     # SECTION X: SUMMARY METRICS FOR EXCEL EXPORT
@@ -1193,12 +1248,12 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     # ==================================================
     mean_sink_all = np.mean(sink_indices, axis=1)
 
-    # top–2 sinks (all windows)
-    sink_idx_all, sink_label_all, sink_val_all = safe_topk(mean_sink_all, ch_names, k=2)
+    # top–5 sinks (all windows)
+    sink_idx_all, sink_label_all, sink_val_all = safe_topk(mean_sink_all, ch_names, k=5)
 
-    # top–2 sources (all windows)
+    # top–5 sources (all windows)
     mean_source_all = np.mean(source_indices, axis=1)
-    source_idx_all, source_label_all, source_val_all = safe_topk(mean_source_all, ch_names, k=2)
+    source_idx_all, source_label_all, source_val_all = safe_topk(mean_source_all, ch_names, k=5)
 
     # ==================================================
     # 2) Mean Sink Index (GOOD windows only)
@@ -1206,18 +1261,38 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     mean_sink_good = np.mean(sink_indices_good, axis=1)
 
     # top–2 sink (good only)
-    sink_idx_good, sink_label_good, sink_val_good = safe_topk(mean_sink_good, ch_names, k=2)
+    sink_idx_good, sink_label_good, sink_val_good = safe_topk(mean_sink_good, ch_names, k=5)
 
     # top–2 source (good only)
     mean_source_good = np.mean(source_indices_good, axis=1)
-    source_idx_good, source_label_good, source_val_good = safe_topk(mean_source_good, ch_names, k=2)
+    source_idx_good, source_label_good, source_val_good = safe_topk(mean_source_good, ch_names, k=5)
 
     # ==================================================
-    # 3) Build result dictionary for this subject
+    # 3) Regional Metrics (FT & CPO) — ALL windows
+    # ==================================================
+    FT_Sink_All = roi_mean(mean_sink_all, ch_names, frontotemporal_labels)
+    FT_Source_All = roi_mean(mean_source_all, ch_names, frontotemporal_labels)
+
+    CPO_Sink_All = roi_mean(mean_sink_all, ch_names, centro_parieto_occipital_labels)
+    CPO_Source_All = roi_mean(mean_source_all, ch_names, centro_parieto_occipital_labels)
+
+    # ==================================================
+    # 5) Regional Metrics (FT & CPO) — GOOD windows
+    # ==================================================
+    FT_Sink_Good = roi_mean(mean_sink_good, ch_names, frontotemporal_labels)
+    FT_Source_Good = roi_mean(mean_source_good, ch_names, frontotemporal_labels)
+
+    CPO_Sink_Good = roi_mean(mean_sink_good, ch_names, centro_parieto_occipital_labels)
+    CPO_Source_Good = roi_mean(mean_source_good, ch_names, centro_parieto_occipital_labels)
+
+    # ==================================================
+    # 4) Build result dictionary for this subject
     # ==================================================
     # ==================================================
     # CLEAN SUMMARY RESULT ENTRY (MATCHES RIGHT COLUMN)
     # ==================================================
+    def safe_div(a, b):
+        return float(a / b) if (b not in [0, None, np.nan] and not np.isnan(b)) else np.nan
 
     result_entry = {
         "ID": PATIENT_ID,
@@ -1233,39 +1308,42 @@ for file_idx, file_name in enumerate(csv_files, start=1):
         "beta": rel_band.get("beta"),
         "gamma": rel_band.get("gamma"),
 
-        # ===== Good SS Analysis % =====
-        "Mean Sink Index (Good)": float(np.nanmean(mean_sink_good)),
-        "Mean Source Index (Good)": float(np.nanmean(mean_source_good)),
-        "Top Sink Ch 1,2 (Good)": ", ".join(sink_label_good[:2]) if sink_label_good else None,
-        "Top Source Ch 1,2 (Good)": ", ".join(source_label_good[:2]) if source_label_good else None,
+        # ===== Regional Sink/Source Metrics =====
+        "FT/CPO Sink (All)": safe_div(FT_Sink_All, CPO_Sink_All),
+        "FT/CPO Source (All)": safe_div(FT_Source_All, CPO_Source_All),
+
+        "FT/CPO Sink (Good)": safe_div(FT_Sink_Good, CPO_Sink_Good),
+        "FT/CPO Source (Good)": safe_div(FT_Source_Good, CPO_Source_Good),
 
         # ===== Good SS Analysis % =====
-        "Mean Sink Index (All)": float(np.nanmean(mean_sink_all)),
-        "Mean Source Index (All)": float(np.nanmean(mean_source_all)),
-        "Top Sink Ch 1,2 (All)": ", ".join(sink_label_all[:2]) if sink_label_all else None,
-        "Top Source Ch 1,2 (All)": ", ".join(source_label_all[:2]) if source_label_all else None,
+        #"Mean Sink Index (Good)": float(np.nanmean(mean_sink_good)),
+        #"Mean Source Index (Good)": float(np.nanmean(mean_source_good)),
+        "Top Sink Ch 1_to_5 (Good)": ", ".join(sink_label_good[:5]) if sink_label_good else None,
+        "Top Source Ch 1_to_5 (Good)": ", ".join(source_label_good[:5]) if source_label_good else None,
+
+        # ===== SS Analysis % =====
+        #"Mean Sink Index (All)": float(np.nanmean(mean_sink_all)),
+        #"Mean Source Index (All)": float(np.nanmean(mean_source_all)),
+        "Top Sink Ch 1_to_5 (All)": ", ".join(sink_label_all[:5]) if sink_label_all else None,
+        "Top Source Ch 1_to_5 (All)": ", ".join(source_label_all[:5]) if source_label_all else None,
+
+        # ===== Spatial Entropy Metrics (Good) =====
+        "Spatial Entropy (Good)": H_total_good,
+        "Spatial Entropy (FT Good)": H_FT_good,
+        "Spatial Entropy (CPO Good)": H_CPO_good,
+        "Spatial Entropy Ratio (FT/CPO Good)": H_ratio_good,
+
+        # ===== Spatial Entropy Metrics (All) =====
+        "Spatial Entropy (Total)": H_total,
+        "Spatial Entropy (FT)": H_FT,
+        "Spatial Entropy (CPO)": H_CPO,
+        "Spatial Entropy Ratio (FT/CPO)": H_ratio,
 
     }
 
     # Add this subject to batch results
     results.append(result_entry)
     plt.close('all')
-
-    # results.append({
-    #     "ID": PATIENT_ID,
-    #     "Original Duration": orig_duration,
-    #     "Clean Duration": clean_duration,
-    #     "TBR": mean_TBR_val,
-    #     **rel_band,  # expands alpha=value, beta=value, ...
-    #     "Good Window Percent": percent_good,
-    #     "Sink Index": overall_sink,
-    #     "Source Index": overall_source,
-    #     "Good Sink Index": overall_sink_good,
-    #     "Good Source Index": overall_source_good,
-    #     "Top five Sink": top_sink_idx,
-    #     "Top Good five Sink": top_sink_good_idx,
-    #     # add all 10–12 metrics here
-    # })
 
 df = pd.DataFrame(results)
 
