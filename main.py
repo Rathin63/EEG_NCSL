@@ -51,6 +51,8 @@ for f in csv_files:
 
 results = []
 
+start_time = time.time()
+
 # Loop through all CSVs
 for file_idx, file_name in enumerate(csv_files, start=1):
     PATIENT_ID = Path(file_name).stem
@@ -1187,12 +1189,14 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     left_FT = [
         "Fp1",
         "F7", "F3",
+        "FC3"
         "T7"
     ]
 
     right_FT = [
         "Fp2",
         "F8", "F4",
+        "FC4"
         "T8"
     ]
 
@@ -1277,6 +1281,10 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     sink_L_CPO_good = float(np.nanmean(mean_sink_index_good[L_CPO_idx]))
     sink_R_CPO_good = float(np.nanmean(mean_sink_index_good[R_CPO_idx]))
 
+    # ----------------------------------------------
+    # ASYMMETRY INDEX (Right vs Left)
+    # ----------------------------------------------
+
     #For asymmetry calculation
     eps = 1e-6
 
@@ -1300,6 +1308,7 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     H_FT = hist_entropy(sink_FT)
     H_CPO = hist_entropy(sink_CPO)
     H_ratio = H_FT / H_CPO if H_CPO > 0 else np.nan
+    Entropy_Gradient_All = H_FT - H_CPO
 
 
     # GOOD-window entropies
@@ -1307,6 +1316,7 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     H_FT_good = hist_entropy(sink_FT_good)
     H_CPO_good = hist_entropy(sink_CPO_good)
     H_ratio_good = H_FT_good / H_CPO_good if H_CPO_good > 0 else np.nan
+    Entropy_Gradient_Good = H_FT_good - H_CPO_good
 
 
     # ============================================
@@ -1367,6 +1377,16 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     CPO_Sink_Good = roi_mean(mean_sink_good, ch_names, centro_parieto_occipital_labels)
     CPO_Source_Good = roi_mean(mean_source_good, ch_names, centro_parieto_occipital_labels)
 
+    # ----------------------------------------------
+    # FRONTO_PARIETAL GRADIENT (FT ↔ CPO) (Top vs Bottom)
+    # ----------------------------------------------
+
+    Sink_Gradient_All = FT_Sink_All - CPO_Sink_All
+    Sink_Gradient_Good = FT_Sink_Good - CPO_Sink_Good
+
+    Source_Gradient_All = FT_Source_All - CPO_Source_All
+    Source_Gradient_Good = FT_Source_Good - CPO_Source_Good
+
     # ==================================================
     # 4) Build result dictionary for this subject
     # ==================================================
@@ -1414,12 +1434,14 @@ for file_idx, file_name in enumerate(csv_files, start=1):
         "SI value Entropy (FT Good)": H_FT_good,
         "SI value Entropy (CPO Good)": H_CPO_good,
         "SI value Entropy Ratio (FT/CPO Good)": H_ratio_good,
+        "Entropy Gradient (Good)": Entropy_Gradient_Good,
 
         # ===== Spatial Entropy Metrics (All) =====
         "SI value Entropy (Total)": H_total,
         "SI value Entropy (FT)": H_FT,
         "SI value Entropy (CPO)": H_CPO,
         "SI value Entropy Ratio (FT/CPO)": H_ratio,
+        "Entropy Gradient (All)": Entropy_Gradient_All,
 
         # ===== Asymmetry Index (All) =====
         "AI_FT_All": AI_FT_all,
@@ -1431,6 +1453,11 @@ for file_idx, file_name in enumerate(csv_files, start=1):
         "AI_CPO_Good": AI_CPO_good,
         "AI_All_Good": AI_all_good,
 
+        # ===== Gradient (GOOD) =====
+        "Sink Gradient (All)":  Sink_Gradient_All,
+        "Sink Gradient (Good)": Sink_Gradient_Good,
+        "Source Gradient (All)":  Source_Gradient_All,
+        "Source Gradient (Good)": Source_Gradient_Good,
     }
 
     # Add this subject to batch results
@@ -1467,4 +1494,3 @@ wb.save(batch_excel_path)
 
 
 print(f"\nBatch summary saved to:\n{batch_excel_path}")
-
