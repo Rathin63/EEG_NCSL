@@ -1175,10 +1175,25 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     # REGION DEFINITIONS (FT vs CPO)
     # ================================
 
+    left_all = [ch for ch in ch_names if ch.endswith("1") or ch in ["Cz", "CPZ", "Pz", "OZ", "Fz"]]
+    right_all = [ch for ch in ch_names if ch.endswith("2")]
+
     frontotemporal_labels = [
         "Fp1", "Fp2",
         "F7", "F3", "Fz", "F4", "F8",
          "T7", "T8"
+    ]
+
+    left_FT = [
+        "Fp1",
+        "F7", "F3",
+        "T7"
+    ]
+
+    right_FT = [
+        "Fp2",
+        "F8", "F4",
+        "T8"
     ]
 
     centro_parieto_occipital_labels = [
@@ -1186,6 +1201,20 @@ for file_idx, file_name in enumerate(csv_files, start=1):
         "CP3", "CPZ", "CP4",
         "P7", "P3", "Pz", "P4", "P8",
         "O1", "OZ","O2"
+    ]
+
+    left_CPO = [
+        "C3",
+        "CP3",
+        "P7", "P3",
+        "O1"
+    ]
+
+    right_CPO = [
+        "C4",
+        "CP4",
+        "P4", "P8",
+        "O2"
     ]
 
 
@@ -1198,32 +1227,85 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     # Map channel names to indices
     label_to_idx = {ch: i for i, ch in enumerate(ch_names)}
 
-    # Get FT and CPO channel indices
+    # Get all left and right channel indices
+    L_all_idx = [label_to_idx[ch] for ch in left_all if ch in label_to_idx]
+    R_all_idx = [label_to_idx[ch] for ch in right_all if ch in label_to_idx]
+
+    # Get FT,L_FT,R_FT and CPO,L_CPO,R_CPO channel indices
     FT_idx = [label_to_idx[ch] for ch in frontotemporal_labels if ch in label_to_idx]
     CPO_idx = [label_to_idx[ch] for ch in centro_parieto_occipital_labels if ch in label_to_idx]
 
-    # Extract region-wise sink values
+    L_FT_idx = [label_to_idx[ch] for ch in left_FT if ch in label_to_idx]
+    R_FT_idx = [label_to_idx[ch] for ch in right_FT if ch in label_to_idx]
+
+    L_CPO_idx = [label_to_idx[ch] for ch in left_CPO if ch in label_to_idx]
+    R_CPO_idx = [label_to_idx[ch] for ch in right_CPO if ch in label_to_idx]
+
+    # Extract region-wise sink values for all windows
+
+    #Sink index for all left and all right channels for all windows
+    L_all_all = float(np.nanmean(mean_sink_index[L_all_idx]))
+    R_all_all = float(np.nanmean(mean_sink_index[R_all_idx]))
+
+    # Sink index for FT and CPO channels for all windows
     sink_FT = mean_sink_index[FT_idx]
     sink_CPO = mean_sink_index[CPO_idx]
 
-    from preprocessing.utils.entropy_utils import spatial_entropy
-    H_total = spatial_entropy(mean_sink_index)
-    H_FT = spatial_entropy(sink_FT)
-    H_CPO = spatial_entropy(sink_CPO)
-    H_ratio = H_FT / H_CPO if H_CPO > 0 else np.nan
+    # Sink index for left and right FT channels for all windows
+    sink_L_FT = float(np.nanmean(mean_sink_index[L_FT_idx]))
+    sink_R_FT = float(np.nanmean(mean_sink_index[R_FT_idx]))
 
-    # ----------------------------------------------
-    # ENTROPY METRICS FOR GOOD WINDOWS ONLY
-    # ----------------------------------------------
-    # mean_sink_index_good already exists
-    # Compute region-wise GOOD-window SI
+    # Sink index for left and right CPO channels for all windows
+    sink_L_CPO = float(np.nanmean(mean_sink_index[L_CPO_idx]))
+    sink_R_CPO = float(np.nanmean(mean_sink_index[R_CPO_idx]))
+
+    # Extract region-wise sink values for all windows
+
+    # Sink index for all left and all right channels for GOOD windows
+    L_all_good = float(np.nanmean(mean_sink_index_good[L_all_idx]))
+    R_all_good = float(np.nanmean(mean_sink_index_good[R_all_idx]))
+
+    # Sink index for FT and CPO channels for GOOD windows
     sink_FT_good = mean_sink_index_good[FT_idx]
     sink_CPO_good = mean_sink_index_good[CPO_idx]
 
+    # Sink index for left and right FT channels for GOOD windows
+    sink_L_FT_good = float(np.nanmean(mean_sink_index_good[L_FT_idx]))
+    sink_R_FT_good = float(np.nanmean(mean_sink_index_good[R_FT_idx]))
+
+    # Sink index for left and right FT channels for GOOD windows
+    sink_L_CPO_good = float(np.nanmean(mean_sink_index_good[L_CPO_idx]))
+    sink_R_CPO_good = float(np.nanmean(mean_sink_index_good[R_CPO_idx]))
+
+    #For asymmetry calculation
+    eps = 1e-6
+
+    #Asymmetry Calculation for all windows
+    AI_all_all = (L_all_all - R_all_all) / (L_all_all + R_all_all + eps) # All left and All right
+    AI_FT_all = (sink_L_FT - sink_R_FT) / (sink_L_FT + sink_R_FT + eps) # All FT left and All FT right
+    AI_CPO_all = (sink_L_CPO - sink_R_CPO) / (sink_L_CPO + sink_R_CPO + eps) # All CPO left and All CPO right
+
+    # Asymmetry Calculation for GOOD windows
+    AI_all_good = (L_all_good - R_all_good) / (L_all_good + R_all_good + eps) # GOOD left and All right
+    AI_FT_good = (sink_L_FT_good - sink_R_FT_good) / (sink_L_FT_good + sink_R_FT_good + eps) # GOOD FT left and All FT right
+    AI_CPO_good = (sink_L_CPO_good - sink_R_CPO_good) / (sink_L_CPO_good + sink_R_CPO_good + eps) # All CPO left and All CPO right
+
+    # ----------------------------------------------
+    # ENTROPY METRICS
+    # ----------------------------------------------
+    from preprocessing.utils.entropy_utils import hist_entropy
+
+    # All-window entropies
+    H_total = hist_entropy(mean_sink_index)
+    H_FT = hist_entropy(sink_FT)
+    H_CPO = hist_entropy(sink_CPO)
+    H_ratio = H_FT / H_CPO if H_CPO > 0 else np.nan
+
+
     # GOOD-window entropies
-    H_total_good = spatial_entropy(mean_sink_index_good)
-    H_FT_good = spatial_entropy(sink_FT_good)
-    H_CPO_good = spatial_entropy(sink_CPO_good)
+    H_total_good = hist_entropy(mean_sink_index_good)
+    H_FT_good = hist_entropy(sink_FT_good)
+    H_CPO_good = hist_entropy(sink_CPO_good)
     H_ratio_good = H_FT_good / H_CPO_good if H_CPO_good > 0 else np.nan
 
 
@@ -1328,16 +1410,26 @@ for file_idx, file_name in enumerate(csv_files, start=1):
         "Top Source Ch 1_to_5 (All)": ", ".join(source_label_all[:5]) if source_label_all else None,
 
         # ===== Spatial Entropy Metrics (Good) =====
-        "Spatial Entropy (Good)": H_total_good,
-        "Spatial Entropy (FT Good)": H_FT_good,
-        "Spatial Entropy (CPO Good)": H_CPO_good,
-        "Spatial Entropy Ratio (FT/CPO Good)": H_ratio_good,
+        "SI value Entropy (Good)": H_total_good,
+        "SI value Entropy (FT Good)": H_FT_good,
+        "SI value Entropy (CPO Good)": H_CPO_good,
+        "SI value Entropy Ratio (FT/CPO Good)": H_ratio_good,
 
         # ===== Spatial Entropy Metrics (All) =====
-        "Spatial Entropy (Total)": H_total,
-        "Spatial Entropy (FT)": H_FT,
-        "Spatial Entropy (CPO)": H_CPO,
-        "Spatial Entropy Ratio (FT/CPO)": H_ratio,
+        "SI value Entropy (Total)": H_total,
+        "SI value Entropy (FT)": H_FT,
+        "SI value Entropy (CPO)": H_CPO,
+        "SI value Entropy Ratio (FT/CPO)": H_ratio,
+
+        # ===== Asymmetry Index (All) =====
+        "AI_FT_All": AI_FT_all,
+        "AI_CPO_All": AI_CPO_all,
+        "AI_All_All": AI_all_all,
+
+        # ===== Asymmetry Index (GOOD) =====
+        "AI_FT_Good": AI_FT_good,
+        "AI_CPO_Good": AI_CPO_good,
+        "AI_All_Good": AI_all_good,
 
     }
 

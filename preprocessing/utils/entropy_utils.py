@@ -1,6 +1,6 @@
 import numpy as np
 
-def spatial_entropy(values, bins=32):
+def hist_entropy(values, bins=32):
     """Compute Shannon entropy of a 1D array."""
     v = np.array(values, dtype=float)
 
