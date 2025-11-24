@@ -12,6 +12,7 @@ import pandas as pd
 import os
 from pathlib import Path
 import seaborn as sns
+import time
 
 # Matplotlib (batch-safe)
 import matplotlib
@@ -34,7 +35,7 @@ sys.path.insert(0, os.path.join(os.getcwd(), 'preprocessing', 'TDBRAIN'))
 from preprocessing.TDBRAIN.autopreprocessing import dataset as ds
 
 # Input and Output Path
-DATA_PATH = r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Sample\diff_data2"
+DATA_PATH = r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Sample\diff_data2\ADHD_EC_Train"
 BATCH_OUTPUT_PATH = r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Batch_Outputs"
 
 Path(BATCH_OUTPUT_PATH).mkdir(parents=True, exist_ok=True)
@@ -121,8 +122,8 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     eeg_data.detect_jumps()
 
     # Detect kurtosis artifacts
-    print("Detecting kurtosis artifacts...")
-    eeg_data.detect_kurtosis()
+    #print("Detecting kurtosis artifacts...")
+    #eeg_data.detect_kurtosis()
 
     # Detect extreme voltage swings
     print("Detecting extreme voltage swings...")
@@ -431,7 +432,7 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     print(f"Channels: {n_channels}, Samples: {n_samples}")
 
     # Parameters for A matrix computation
-    window_length = 0.15 # (in seconds)
+    window_length = 0.125 # (in seconds)
     alpha = 1e-6  # Regularization parameter
     fs = eeg_data.Fs
 
@@ -681,6 +682,13 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     # ---- Create side-by-side subplots ----
     fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=False)
 
+    # ---- Sanitize MSE for log scale for Runtime Error Removal ----
+    eps = 1e-12
+    MSE_values = np.asarray(MSE_values, dtype=float)
+    MSE_values[~np.isfinite(MSE_values)] = eps  # NaN/Inf -> eps
+    MSE_values[MSE_values <= 0] = eps  # Zero/negative -> eps
+
+
     # ---- Left subplot: MSE ----
     for ch in range(n_channels):
         axes[0].scatter(
@@ -690,6 +698,16 @@ for file_idx, file_name in enumerate(csv_files, start=1):
             alpha=0.6,
             s=25
         )
+    # --- Force-clean Y-axis limits before log scale ---
+    y_min = np.nanmin(MSE_values)
+    y_max = np.nanmax(MSE_values)
+
+    if not np.isfinite(y_min) or y_min <= 0:
+        y_min = 1e-12
+    if not np.isfinite(y_max):
+        y_max = 1e-6  # something reasonable
+
+    axes[0].set_ylim(y_min, y_max)
 
     axes[0].set_xlabel("Channels")
     axes[0].set_ylabel("MSE across windows")
@@ -1177,7 +1195,7 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     # REGION DEFINITIONS (FT vs CPO)
     # ================================
 
-    left_all = [ch for ch in ch_names if ch.endswith("1") or ch in ["Cz", "CPZ", "Pz", "OZ", "Fz"]]
+    left_all = [ch for ch in ch_names if ch.endswith("1") ]
     right_all = [ch for ch in ch_names if ch.endswith("2")]
 
     frontotemporal_labels = [
@@ -1404,30 +1422,36 @@ for file_idx, file_name in enumerate(csv_files, start=1):
         "TBR": mean_TBR_val,
 
         # ===== Band Power % =====
-        "delta": rel_band.get("delta"),
-        "theta": rel_band.get("theta"),
-        "alpha": rel_band.get("alpha"),
-        "beta": rel_band.get("beta"),
-        "gamma": rel_band.get("gamma"),
+        # "delta": rel_band.get("delta"),
+        # "theta": rel_band.get("theta"),
+        # "alpha": rel_band.get("alpha"),
+        # "beta": rel_band.get("beta"),
+        # "gamma": rel_band.get("gamma"),
 
         # ===== Regional Sink/Source Metrics =====
         "FT/CPO Sink (All)": safe_div(FT_Sink_All, CPO_Sink_All),
-        "FT/CPO Source (All)": safe_div(FT_Source_All, CPO_Source_All),
+        #"FT/CPO Source (All)": safe_div(FT_Source_All, CPO_Source_All),
 
         "FT/CPO Sink (Good)": safe_div(FT_Sink_Good, CPO_Sink_Good),
-        "FT/CPO Source (Good)": safe_div(FT_Source_Good, CPO_Source_Good),
+        #"FT/CPO Source (Good)": safe_div(FT_Source_Good, CPO_Source_Good),
+
+        "FT Sink (All)": FT_Sink_All,
+        "CPO Sink (All)": CPO_Sink_All,
+
+        "FT Sink (Good)": FT_Sink_Good,
+        "CPO Sink (Good)": CPO_Sink_Good,
 
         # ===== Good SS Analysis % =====
         #"Mean Sink Index (Good)": float(np.nanmean(mean_sink_good)),
         #"Mean Source Index (Good)": float(np.nanmean(mean_source_good)),
-        "Top Sink Ch 1_to_5 (Good)": ", ".join(sink_label_good[:5]) if sink_label_good else None,
-        "Top Source Ch 1_to_5 (Good)": ", ".join(source_label_good[:5]) if source_label_good else None,
+        # "Top Sink Ch 1_to_5 (Good)": ", ".join(sink_label_good[:5]) if sink_label_good else None,
+        # "Top Source Ch 1_to_5 (Good)": ", ".join(source_label_good[:5]) if source_label_good else None,
 
         # ===== SS Analysis % =====
         #"Mean Sink Index (All)": float(np.nanmean(mean_sink_all)),
         #"Mean Source Index (All)": float(np.nanmean(mean_source_all)),
-        "Top Sink Ch 1_to_5 (All)": ", ".join(sink_label_all[:5]) if sink_label_all else None,
-        "Top Source Ch 1_to_5 (All)": ", ".join(source_label_all[:5]) if source_label_all else None,
+        # "Top Sink Ch 1_to_5 (All)": ", ".join(sink_label_all[:5]) if sink_label_all else None,
+        # "Top Source Ch 1_to_5 (All)": ", ".join(source_label_all[:5]) if source_label_all else None,
 
         # ===== Spatial Entropy Metrics (Good) =====
         "SI value Entropy (Good)": H_total_good,
@@ -1437,27 +1461,27 @@ for file_idx, file_name in enumerate(csv_files, start=1):
         "Entropy Gradient (Good)": Entropy_Gradient_Good,
 
         # ===== Spatial Entropy Metrics (All) =====
-        "SI value Entropy (Total)": H_total,
-        "SI value Entropy (FT)": H_FT,
-        "SI value Entropy (CPO)": H_CPO,
-        "SI value Entropy Ratio (FT/CPO)": H_ratio,
+        "SI value Entropy (All)": H_total,
+        "SI value Entropy (FT All)": H_FT,
+        "SI value Entropy (CPO All)": H_CPO,
+        "SI value Entropy Ratio (FT/CPO All)": H_ratio,
         "Entropy Gradient (All)": Entropy_Gradient_All,
 
         # ===== Asymmetry Index (All) =====
         "AI_FT_All": AI_FT_all,
         "AI_CPO_All": AI_CPO_all,
-        "AI_All_All": AI_all_all,
+        #"AI_All_All": AI_all_all,
 
         # ===== Asymmetry Index (GOOD) =====
         "AI_FT_Good": AI_FT_good,
         "AI_CPO_Good": AI_CPO_good,
-        "AI_All_Good": AI_all_good,
+        #"AI_All_Good": AI_all_good,
 
         # ===== Gradient (GOOD) =====
         "Sink Gradient (All)":  Sink_Gradient_All,
         "Sink Gradient (Good)": Sink_Gradient_Good,
-        "Source Gradient (All)":  Source_Gradient_All,
-        "Source Gradient (Good)": Source_Gradient_Good,
+        #"Source Gradient (All)":  Source_Gradient_All,
+        #"Source Gradient (Good)": Source_Gradient_Good,
     }
 
     # Add this subject to batch results
@@ -1465,10 +1489,8 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     plt.close('all')
 
 df = pd.DataFrame(results)
-
 # Ensure batch-level output file goes to BATCH_OUTPUT_PATH
 batch_excel_path = os.path.join(BATCH_OUTPUT_PATH, "BatchSummary.xlsx")
-
 df.to_excel(batch_excel_path, index=False)
 # --- Auto-adjust Excel column widths ---
 from openpyxl import load_workbook
@@ -1494,3 +1516,19 @@ wb.save(batch_excel_path)
 
 
 print(f"\nBatch summary saved to:\n{batch_excel_path}")
+
+# ----- Final Summary -----
+total_subjects = len(results)
+total_time_sec = time.time() - start_time
+
+# Convert seconds → HH:MM:SS
+hrs = int(total_time_sec // 3600)
+mins = int((total_time_sec % 3600) // 60)
+secs = int(total_time_sec % 60)
+
+print("\n" + "="*60)
+print("TIMING SUMMARY OF BATCH PROCESSING")
+print("="*60)
+print(f"Total subjects analyzed: {total_subjects}")
+print(f"Total time taken: {hrs:02d}:{mins:02d}:{secs:02d} (HH:MM:SS)")
+print("="*60 + "\n")
