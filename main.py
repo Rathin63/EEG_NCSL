@@ -35,8 +35,8 @@ sys.path.insert(0, os.path.join(os.getcwd(), 'preprocessing', 'TDBRAIN'))
 from preprocessing.TDBRAIN.autopreprocessing import dataset as ds
 
 # Input and Output Path
-DATA_PATH = r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Sample\diff_data2\ADHD_EC_Train"
-BATCH_OUTPUT_PATH = r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Batch_Outputs"
+DATA_PATH = r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Sample\diff_data2\ADHD\ADHD_Low"
+BATCH_OUTPUT_PATH = os.path.join(DATA_PATH, "Results")
 
 Path(BATCH_OUTPUT_PATH).mkdir(parents=True, exist_ok=True)
 
@@ -1489,11 +1489,20 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     plt.close('all')
 
 df = pd.DataFrame(results)
-# Ensure batch-level output file goes to BATCH_OUTPUT_PATH
-batch_excel_path = os.path.join(BATCH_OUTPUT_PATH, "BatchSummary.xlsx")
+
+# Extract last folder name from DATA_PATH
+last_folder = os.path.basename(DATA_PATH.rstrip("\\/"))
+
+# Build filename: BatchSummary_<lastfolder>.xlsx
+excel_name = f"BatchSummary_{last_folder}.xlsx"
+
+# Save Excel
+batch_excel_path = os.path.join(BATCH_OUTPUT_PATH, excel_name)
 df.to_excel(batch_excel_path, index=False)
-# --- Auto-adjust Excel column widths ---
+
+# Auto-adjust Excel column widths (unchanged)
 from openpyxl import load_workbook
+
 
 wb = load_workbook(batch_excel_path)
 ws = wb.active
