@@ -383,6 +383,138 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     plt.savefig(os.path.join(OUTPUT_PATH, f'{PATIENT_ID}_band_composition.png'), dpi=150)
     plt.show()
 
+    # %% SECTION 2E: COMBINED 3×2 TOPOGRAPHY PANEL (TOTAL + EEG BANDS)
+    print("\n" + "=" * 60)
+    print("SECTION 2E: COMBINED TOPOGRAPHY PANEL (TOTAL + EEG BANDS)")
+    print("=" * 60)
+
+    # ------------------------------------------------------------
+    # 1. Compute Total Power Topomap (0.5–48 Hz)
+    # ------------------------------------------------------------
+    total_power_topo = np.zeros(n_channels)
+
+    for ch in range(n_channels):
+        freqs, psd = welch(
+            data_clean[ch],
+            fs=fs,
+            nperseg=fs * 2,
+            noverlap=fs,
+            scaling='density'
+        )
+        idx = (freqs >= 0.5) & (freqs <= 48)
+        total_power_topo[ch] = np.trapz(psd[idx], freqs[idx])
+
+    print(f"Total power range: [{total_power_topo.min():.3f}, {total_power_topo.max():.3f}]")
+
+    # ------------------------------------------------------------
+    # 2. Compute band-specific power topomaps
+    # ------------------------------------------------------------
+    band_topos = {}
+
+    for band_name, (fmin, fmax) in bands.items():
+        bp = np.zeros(n_channels)
+
+        for ch in range(n_channels):
+            freqs, psd = welch(
+                data_clean[ch],
+                fs=fs,
+                nperseg=fs * 2,
+                noverlap=fs,
+                scaling='density'
+            )
+            idx = (freqs >= fmin) & (freqs <= fmax)
+            bp[ch] = np.trapz(psd[idx], freqs[idx])
+
+        band_topos[band_name] = bp
+
+    # ------------------------------------------------------------
+    # 3. Prepare MNE info
+    # ------------------------------------------------------------
+    ch_names_topo = eeg_data.labels[:n_channels].tolist()
+    ch_types = ['eeg'] * n_channels
+    info_topo = mne.create_info(ch_names_topo, sfreq=fs, ch_types=ch_types)
+
+    montage = mne.channels.make_standard_montage('standard_1020')
+    info_topo.set_montage(montage)
+
+    pos_dict = info_topo.get_montage().get_positions()['ch_pos']
+
+    # ------------------------------------------------------------
+    # 4. Create 3×2 figure
+    # ------------------------------------------------------------
+    fig, axes = plt.subplots(3, 2, figsize=(14, 16))
+    axes = axes.flatten()
+
+    titles = [
+        "Total Power (0.5–48 Hz)",
+        "Delta (0.5–4 Hz)",
+        "Theta (4–8 Hz)",
+        "Alpha (8–13 Hz)",
+        "Beta (13–30 Hz)",
+        "Gamma (30–48 Hz)"
+    ]
+
+    topo_values = [
+        total_power_topo,
+        band_topos["delta"],
+        band_topos["theta"],
+        band_topos["alpha"],
+        band_topos["beta"],
+        band_topos["gamma"],
+    ]
+
+    # ------------------------------------------------------------
+    # 5. Plot all 6 topomaps (each with own scale)
+    # ------------------------------------------------------------
+    for i, ax in enumerate(axes):
+
+        vals = topo_values[i]
+        vlim = (np.min(vals), np.max(vals))  # each band has unique scale
+
+        im, _ = mne.viz.plot_topomap(
+            vals,
+            info_topo,
+            axes=ax,
+            show=False,
+            cmap="Greens",
+            contours=6,
+            vlim=vlim
+        )
+
+        # Add channel name annotations
+        for name, xy in pos_dict.items():
+            if name in ch_names_topo:
+                ax.text(
+                    xy[0], xy[1],
+                    name,
+                    color='black',
+                    fontsize=7,
+                    ha='center',
+                    va='center'
+                )
+
+        ax.set_title(titles[i], fontsize=12, fontweight='bold')
+
+    # ------------------------------------------------------------
+    # 6. Separate colorbars for each subplot
+    # ------------------------------------------------------------
+    for i, ax in enumerate(axes):
+        # Create separate colorbars (nicer visuals)
+        cbar = fig.colorbar(ax.images[0], ax=ax, fraction=0.046, pad=0.04)
+        cbar.ax.tick_params(labelsize=8)
+
+    plt.suptitle(f"{PATIENT_ID}: Total + Band Power Topographies",
+                 fontsize=16, fontweight="bold")
+
+    plt.subplots_adjust(left=0.05, right=0.98, top=0.93,
+                        bottom=0.05, hspace=0.35)
+
+    combined_path = os.path.join(OUTPUT_PATH, f"{PATIENT_ID}_combined_topomaps.png")
+    plt.savefig(combined_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+    print(f"Combined topomap figure saved to: {combined_path}")
+
     # %% Section 3: Display Preprocessed Data
     print("\n" + "=" * 60)
     print("SECTION 3: VISUALIZING PREPROCESSED DATA")
@@ -1414,6 +1546,77 @@ for file_idx, file_name in enumerate(csv_files, start=1):
     def safe_div(a, b):
         return float(a / b) if (b not in [0, None, np.nan] and not np.isnan(b)) else np.nan
 
+
+    # --- 1) Temporal Variability (STD & CV) across windows ---
+
+    # Sink variability (ALL windows)
+    sink_std_all = float(np.nanmean(np.std(sink_indices, axis=1)))
+    sink_cv_all = float(np.nanmean(
+        np.std(sink_indices, axis=1) / (np.nanmean(sink_indices, axis=1) + 1e-6)
+    ))
+
+    # Sink variability (GOOD windows)
+    sink_std_good = float(np.nanmean(np.std(sink_indices_good, axis=1)))
+    sink_cv_good = float(np.nanmean(
+        np.std(sink_indices_good, axis=1) / (np.nanmean(sink_indices_good, axis=1) + 1e-6)
+    ))
+
+    # --- 2) Global Sink Entropy ---
+
+    from scipy.stats import entropy
+
+    global_sink_entropy_all = float(entropy(mean_sink_all + 1e-6))
+    global_sink_entropy_good = float(entropy(mean_sink_good + 1e-6))
+
+    # --- 3) Standard 10-20 2D coordinates (normalized) ---
+    # Only for electrodes in your 26-channel list
+
+    ten_twenty_xy = {
+        "Fp1": (-0.5, 1.0), "Fp2": (0.5, 1.0),
+        "F7": (-1.0, 0.7), "F3": (-0.5, 0.7), "Fz": (0, 0.7), "F4": (0.5, 0.7), "F8": (1.0, 0.7),
+        "FT7": (-1.2, 0.4), "T7": (-1.3, 0.0), "CP7": (-1.2, -0.4),
+        "FT8": (1.2, 0.4), "T8": (1.3, 0.0), "CP8": (1.2, -0.4),
+        "C3": (-0.5, 0.0), "Cz": (0, 0.0), "C4": (0.5, 0.0),
+        "P7": (-1.0, -0.7), "P3": (-0.5, -0.7), "Pz": (0, -0.7),"P4": (0.5, -0.7), "P8": (1.0, -0.7),
+        "O1": (-0.5, -1.0), "Oz": (0, -1.0), "O2": (0.5, -1.0)
+    }
+
+    # build array of XY coords only for ch_names order
+    ch_pos = np.array([ten_twenty_xy.get(ch, (0, 0)) for ch in ch_names])
+    cz = np.array([0, 0])
+
+    # Sink COM (ALL)
+    sink_centroid_all = np.average(ch_pos, axis=0, weights=mean_sink_all + 1e-6)
+    sink_com_dist_all = float(np.linalg.norm(sink_centroid_all - cz))
+
+    # Sink COM (GOOD)
+    sink_centroid_good = np.average(ch_pos, axis=0, weights=mean_sink_good + 1e-6)
+    sink_com_dist_good = float(np.linalg.norm(sink_centroid_good - cz))
+
+    # --- 4) Switching Rate ---
+
+    # ALL windows
+    top_sink_each_window_all = np.argmax(sink_indices, axis=0)
+    switch_rate_all = float(np.mean(np.diff(top_sink_each_window_all) != 0))
+
+    # GOOD windows
+    top_sink_each_window_good = np.argmax(sink_indices_good, axis=0)
+    switch_rate_good = float(np.mean(np.diff(top_sink_each_window_good) != 0))
+
+    # --- 5) FT–CPO temporal ratio jitter ---
+
+    # ALL windows
+    ft_vals_all = np.mean(sink_indices[FT_idx, :], axis=0)
+    cpo_vals_all = np.mean(sink_indices[CPO_idx, :], axis=0)
+    ft_cpo_ratio_win_all = ft_vals_all / (cpo_vals_all + 1e-6)
+    ft_cpo_jitter_all = float(np.std(ft_cpo_ratio_win_all))
+
+    # GOOD windows
+    ft_vals_good = np.mean(sink_indices_good[FT_idx, :], axis=0)
+    cpo_vals_good = np.mean(sink_indices_good[CPO_idx, :], axis=0)
+    ft_cpo_ratio_win_good = ft_vals_good / (cpo_vals_good + 1e-6)
+    ft_cpo_jitter_good = float(np.std(ft_cpo_ratio_win_good))
+
     result_entry = {
         "ID": PATIENT_ID,
         "Original Duration": orig_duration,
@@ -1482,6 +1685,26 @@ for file_idx, file_name in enumerate(csv_files, start=1):
         "Sink Gradient (Good)": Sink_Gradient_Good,
         #"Source Gradient (All)":  Source_Gradient_All,
         #"Source Gradient (Good)": Source_Gradient_Good,
+
+        # ==== Heterogeneity Features ====
+        "SINK STD (All)": sink_std_all,
+        "SINK STD (Good)": sink_std_good,
+
+        "SINK CV (All)": sink_cv_all,
+        "SINK CV (Good)": sink_cv_good,
+
+        "Global Sink Entropy (All)": global_sink_entropy_all,
+        "Global Sink Entropy (Good)": global_sink_entropy_good,
+
+        "Sink COM Dist (All)": sink_com_dist_all,
+        "Sink COM Dist (Good)": sink_com_dist_good,
+
+        "Sink Switch Rate (All)": switch_rate_all,
+        "Sink Switch Rate (Good)": switch_rate_good,
+
+        "FT-CPO Jitter (All)": ft_cpo_jitter_all,
+        "FT-CPO Jitter (Good)": ft_cpo_jitter_good,
+
     }
 
     # Add this subject to batch results
