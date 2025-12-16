@@ -19,7 +19,7 @@ file_ADHD_High = r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Samp
 # Columns to compare (Excel-style numbering, excluding ID)
 columns_to_compare = [
     5, 7, 10, 11, 16, 24, 25,
-    *range(27, 40)
+    *range(40, 48), 50, 51
 ]
 # columns_to_compare = list(range(5, 27))  # alternative
 

@@ -64,10 +64,8 @@ FEATURES = [
     "TBR",
     "CPO Sink (Good)",
     "AI_FT_Good",
-    "Sink Gradient (Good)",
-    "FT/CPO Sink (Good)"
-
-]
+    "H_mean"
+    ]
 
 # Output folder
 BASE_DIR = os.path.dirname(file_HC)
