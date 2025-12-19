@@ -1,7 +1,7 @@
-#!/usr/bin/env python3
+ #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-EEG Processing Pipeline: Load, Preprocess, Compute A matrices, and Visualize Sink Indices
+EEG Processing Pipeline for ADHD Classification
 """
 
 # %% Section 0: Imports and Setup
@@ -24,7 +24,7 @@ import matplotlib.patches as mpatches
 import mne
 import scipy
 from scipy.signal import welch
-
+from scipy.stats import lognorm, norm
 
 # Import preprocessing modules
 import sys
@@ -778,10 +778,11 @@ def process_directory(DATA_PATH):
 
 
         plt.tight_layout()
-        plt.savefig(plot_path, dpi=300)
+        plt.savefig(os.path.join(OUTPUT_PATH, f'{PATIENT_ID}_A-Mat_SVD.png'),
+                     dpi=150, bbox_inches='tight')
         plt.close()
 
-        print(f"Saved per-subject A-metrics time-series plot to:\n  {plot_path}")
+        print(f"Saved per-subject A-metrics SVD Feature time-series plot to:\n  {OUTPUT_PATH}")
 
         # %% Section 5: Signal Reconstruction
         print("\n" + "=" * 60)
@@ -838,7 +839,7 @@ def process_directory(DATA_PATH):
             # Average correlation for this window
             window_correlations[win_idx] = np.mean(corr_vals)
 
-            if (win_idx + 1) % 10 == 0: #Every 10 windows, prints progress to monitor long runs.
+            if (win_idx + 1) % 50 == 0: #Every 10 windows, prints progress to monitor long runs.
                 print(f"  Processed {win_idx + 1}/{n_windows} windows...")
 
         print(f"Full Signal reconstruction complete!")
@@ -1032,9 +1033,141 @@ def process_directory(DATA_PATH):
                     #dpi=150, bbox_inches='tight')
         plt.show()
 
-    # %% Section 6A: Visualize Original vs Reconstructed Signal
+        # %% Section 6: Log Normal Modelling and Feature Extraction
         print("\n" + "=" * 60)
-        print("SECTION 6A: VISUALIZING RECONSTRUCTION")
+        print("SECTION 6: LOG NORMAL MODELING AND FEATURE EXTRACTION")
+        print("=" * 60)
+
+        from eeg_lognormal_multivariate import extract_multivariate_lognormal_energy
+        from lognormal_features import extract_lognormal_cov_features
+
+        # ----------------------------------
+        # 1. Estimate multivariate log-normal model
+        # ----------------------------------
+        mu_vec, cov_mat, log_energy_windows = extract_multivariate_lognormal_energy(
+            eeg=data_reconstructed,  # shape (26, n_samples)
+            fs_hz=fs,
+            window_ms=window_length*1000,
+            step_ms=window_length*1000,
+        )
+
+        # ----------------------------------
+        # 2. Channel-wise parameters
+        # ----------------------------------
+        mu = np.mean(log_energy_windows, axis=0)  # (26,)
+        sigma = np.std(log_energy_windows, axis=0)  # (26,)
+
+        n_channels = len(mu)
+
+        # ----------------------------------
+        # 3. Scalar Feature Extraction
+        # ----------------------------------
+        ln_features = extract_lognormal_cov_features(
+            mu=mu,
+            sigma=sigma,
+            cov_mat=cov_mat,
+            log_energy_windows = log_energy_windows
+        )
+
+        # ----------------------------------
+        # X-axes
+        # ----------------------------------
+        x_energy = np.logspace(-16, -6, 600)  # for log-normal PDF
+        z_log = np.linspace(mu.min() - 4 * sigma.max(),
+                            mu.max() + 4 * sigma.max(), 600)  # for normal PDF
+
+        # ----------------------------------
+        # Figure layout: 3 Panels
+        # ----------------------------------
+        fig = plt.figure(figsize=(18, 6))
+        gs = fig.add_gridspec(1, 3, width_ratios=[3, 3, 2])
+
+        # ----------------------------------
+        # LEFT: Log Normal PDF plot
+        # ----------------------------------
+
+        ax_ln = fig.add_subplot(gs[0, 0])
+
+        for ch in range(n_channels):
+            pdf_ln = lognorm.pdf(x_energy, s=sigma[ch], scale=np.exp(mu[ch]))
+            ax_ln.plot(x_energy, pdf_ln, alpha=0.6)
+
+        ax_ln.set_xscale("log")
+        ax_ln.set_xlabel("Normalized Energy (log scale)")
+        ax_ln.set_ylabel("Probability Density")
+        ax_ln.set_title("Channel-wise Log-normal PDFs")
+
+        # ----------------------------------
+        # CENTRE: Normal PDFs (log-energy)
+        # ----------------------------------
+
+        ax_n = fig.add_subplot(gs[0, 1])
+
+        for ch in range(n_channels):
+            pdf_n = norm.pdf(z_log, mu[ch], sigma[ch])
+            ax_n.plot(z_log, pdf_n, alpha=0.6)
+
+        ax_n.set_xlabel("log(Energy)")
+        ax_n.set_ylabel("Probability Density")
+        ax_n.set_title("Channel-wise Gaussian PDFs (log-space)")
+
+        # ----------------------------------
+        # Right: μ–σ table
+        # ----------------------------------
+        ax_tbl = fig.add_subplot(gs[0, 2])
+        ax_tbl.axis("off")
+
+        table_data = [
+            [channel_labels[ch], f"{mu[ch]:.3f}", f"{sigma[ch]:.3f}"]
+            for ch in range(n_channels)
+        ]
+
+        table = ax_tbl.table(
+            cellText=table_data,
+            colLabels=["Channel", "μ (log)", "σ (log)"],
+            loc="center",
+            cellLoc="center"
+        )
+
+        table.auto_set_font_size(False)
+        table.set_fontsize(8)
+        table.scale(1.0, 1.3)
+
+        # ----------------------------------
+        # Final layout
+        # ----------------------------------
+        plt.tight_layout()
+        plt.savefig(
+            os.path.join(OUTPUT_PATH, f"{PATIENT_ID}_LogNormal_vs_Normal_PDFs.png"),
+            dpi=150,
+            bbox_inches="tight"
+        )
+        plt.show()
+        print("Log-normal parameters extracted and PDF plotted!")
+
+        # Channel indices
+        idx = np.arange(n_channels)
+
+
+        # Plot covariance matrix
+        plt.figure(figsize=(6, 5))
+        im = plt.imshow(cov_mat, cmap="viridis", aspect="auto")
+        plt.colorbar(im, fraction=0.046, pad=0.04)
+        plt.title("Log-normal Energy Covariance Matrix (26×26)")
+        plt.xlabel("Channel index")
+        plt.ylabel("Channel index")
+        plt.xticks(idx, channel_labels[:26], rotation=90, fontsize=8)
+        plt.yticks(idx, channel_labels[:26], fontsize=8)
+        plt.tick_params(axis="both", which="major", length=4)
+        plt.tight_layout()
+        plt.show()
+        plt.savefig(os.path.join(OUTPUT_PATH, f'{PATIENT_ID}_Log-Normal_En_CoVar_Mat.png'),
+                     dpi=150, bbox_inches='tight')
+        print("Log-normal modeling complete!")
+
+        # %% Section 7A: Visualize Original vs Reconstructed Signal
+        print("\n" + "=" * 60)
+        print("SECTION 7A: VISUALIZING RECONSTRUCTION")
         print("=" * 60)
 
         # Select channels to plot
@@ -1114,9 +1247,9 @@ def process_directory(DATA_PATH):
             ch_corr = np.corrcoef(data_continuous[ch, :], data_reconstructed[ch, :])[0, 1]
             print(f"  {channel_labels[ch]}: {ch_corr:.4f}")
 
-        # %% Section 6B: Visualize Original vs Good-Only Reconstructed Signal
+        # %% Section 7B: Visualize Original vs Good-Only Reconstructed Signal
         print("\n" + "=" * 60)
-        print("SECTION 6B: VISUALIZING GOOD-ONLY RECONSTRUCTION")
+        print("SECTION 7B: VISUALIZING GOOD-ONLY RECONSTRUCTION")
         print("=" * 60)
 
         # Use same channels and time window as before
@@ -1196,9 +1329,9 @@ def process_directory(DATA_PATH):
 
         print(f"\nPer-channel correlations for good windows:") #TODO ADD LATER
 
-        # %% Section 7A: Compute Sink Indices
+        # %% Section 8A: Compute Sink Indices
         print("\n" + "="*60)
-        print("SECTION 7A: COMPUTING SINK INDICES")
+        print("SECTION 8A: COMPUTING SINK INDICES")
         print("="*60)
 
         # Import the identifySS function from utils
@@ -1231,9 +1364,9 @@ def process_directory(DATA_PATH):
         print(f"  Top source channel: {eeg_data.labels[np.argmax(overall_source)]} (index: {np.max(overall_source):.4f})")
 
 
-        # %% Section 7B: Compute Sink Indices (GOOD Windows Only)
+        # %% Section 8B: Compute Sink Indices (GOOD Windows Only)
         print("\n" + "=" * 60)
-        print("SECTION 7B: COMPUTING SINK INDICES (GOOD WINDOWS ONLY)")
+        print("SECTION 8B: COMPUTING SINK INDICES (GOOD WINDOWS ONLY)")
         print("=" * 60)
 
         # Use only windows that passed the threshold
@@ -1268,9 +1401,9 @@ def process_directory(DATA_PATH):
         print(f"  Top source channel (GOOD): {eeg_data.labels[np.argmax(overall_source_good)]} "
               f"(index: {np.max(overall_source_good):.4f})")
 
-        # %% Section 8A: Visualize Sink Index Heatmap
+        # %% Section 9A: Visualize Sink Index Heatmap
         print("\n" + "=" * 60)
-        print("SECTION 8A: VISUALIZING SINK INDEX HEATMAP")
+        print("SECTION 9A: VISUALIZING SINK INDEX HEATMAP")
         print("=" * 60)
 
         # Sort channels by mean sink index
@@ -1312,9 +1445,9 @@ def process_directory(DATA_PATH):
         for i in range(min(5, len(labels_sorted))):
             print(f"  {i + 1}. {labels_sorted[i]}: {mean_sink[sort_idx[i]]:.4f}")
 
-        # %% Section 8B: Visualize Sink Index Heatmap (GOOD Windows Only)
+        # %% Section 9B: Visualize Sink Index Heatmap (GOOD Windows Only)
         print("\n" + "=" * 60)
-        print("SECTION 8B: VISUALIZING GOOD-WINDOW SINK INDEX HEATMAP")
+        print("SECTION 9B: VISUALIZING GOOD-WINDOW SINK INDEX HEATMAP")
         print("=" * 60)
 
         # Sink indices for good windows only (from Section 7B)
@@ -1361,9 +1494,9 @@ def process_directory(DATA_PATH):
         print("=" * 60)
 
 
-    # %% Section 9: Visualize Sink Index Topomap
+    # %% Section 10: Visualize Sink Index Topomap
         print("\n" + "="*60)
-        print("SECTION 9: VISUALIZING SINK INDEX TOPOMAP")
+        print("SECTION 10: VISUALIZING SINK INDEX TOPOMAP")
         print("="*60)
 
         # Calculate mean sink index over entire recording
@@ -1427,9 +1560,9 @@ def process_directory(DATA_PATH):
               f"({(file_idx / len(csv_files)) * 100:.1f}%) files. "
               f"Results saved in: {OUTPUT_PATH}\n")
 
-        # %% Section 9B: Visualize Sink Index Topomap (GOOD Windows Only)
+        # %% Section 10B: Visualize Sink Index Topomap (GOOD Windows Only)
         print("\n" + "=" * 60)
-        print("SECTION 9B: VISUALIZING GOOD-WINDOW SINK INDEX TOPO MAP")
+        print("SECTION 10B: VISUALIZING GOOD-WINDOW SINK INDEX TOPO MAP")
         print("=" * 60)
 
         # Mean sink index for GOOD windows only
@@ -1630,9 +1763,12 @@ def process_directory(DATA_PATH):
 
 
         # ============================================
-        # SECTION X: SUMMARY METRICS FOR EXCEL EXPORT
+        # SECTION 11: SUMMARY METRICS FOR EXCEL EXPORT
         # ============================================
-
+        # %% Section 11: Summary Metrics for Excel Export
+        print("\n" + "=" * 60)
+        print("SECTION 11: SUMMARY METRICS FOR EXCEL EXPORT")
+        print("=" * 60)
         # ---------- Safe helpers ----------
         def safe_topk(arr, labels, k=2):
             """Return top-k indices, labels, and values from a 1D array."""
@@ -1881,11 +2017,35 @@ def process_directory(DATA_PATH):
 
         }
 
+        # Append log-normal features (AFTER)
+        for k, v in ln_features.items():
+            result_entry[f"logn_{k}"] = v
+
+        # ==================================================
         # Add this subject to batch results
         results.append(result_entry)
         plt.close('all')
 
     df = pd.DataFrame(results)
+
+    # ==================================================
+    # Min–max normalization of log-likelihood (across all subjects)
+    # ==================================================
+
+    ll_col = "logn_log_likelihood_mean"
+
+    if ll_col in df.columns:
+        ll_vals = df[ll_col].values
+
+        # Handle case where all values are identical or NaN
+        ll_min = np.nanmin(ll_vals)
+        ll_max = np.nanmax(ll_vals)
+
+        if ll_max > ll_min:
+            df["logn_log_likelihood_norm"] = (ll_vals - ll_min) / (ll_max - ll_min)
+        else:
+            # All values identical → set normalized value to 0
+            df["logn_log_likelihood_norm"] = 0.0
 
     # Extract last folder name from DATA_PATH
     last_folder = os.path.basename(DATA_PATH.rstrip("\\/"))

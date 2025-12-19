@@ -146,8 +146,8 @@ inner_cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
 # 1. SVM-RBF Hyperparameter Grid
 # ----------------------------------------
 svm_param_grid = {
-    "clf__C": [0.1, 1, 5, 10, 20],          # SVM soft margin — increase = less regularization
-    "clf__gamma": ["scale", "auto", 0.1, 0.01, 0.001],   # RBF kernel width
+    "clf__C": [1, 2, 3, 5, 7, 10, 15, 20, 30, 50],          # SVM soft margin — increase = less regularization
+    "clf__gamma": [0.02, 0.05, 0.08, 0.1, 0.12, 0.15, 0.2, 0.3],   # RBF kernel width
 }
 
 svm_pipeline = Pipeline([
