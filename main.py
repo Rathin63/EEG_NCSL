@@ -169,16 +169,6 @@ def process_directory(DATA_PATH):
         print("EEG Shape Before removal:", eeg_data.data.shape)
         print("Opted for Artifact Removal..")
         print("Defining artifacts...")
-        eeg_data.remove_artifacts(remove_art=True)
-        print("EEG Shape After removal:", eeg_data.data.shape)
-        clean_duration = eeg_data.data.shape[1] / eeg_data.Fs # Result---2
-
-        # Option 2: Keep artifacts #TODO Add a helper function here later
-        # eeg_data.remove_artifacts(remove_art=False)
-        # print("Not Opted for Artifact Removal..")
-        # clean_duration = eeg_data.data.shape[1] / eeg_data.Fs # Result---2
-
-        # After define_artifacts()
         if 'artifacts' in eeg_data.labels:
             artidx = np.where(eeg_data.labels == 'artifacts')[0]
             if len(artidx) > 0 and artidx[0] < eeg_data.data.shape[0]:
@@ -198,10 +188,42 @@ def process_directory(DATA_PATH):
                     print("  ⚠️ Warning: >30% artifacts - consider excluding artifact windows")
                 else:
                     print("  ✅ Artifact level acceptable for continuous analysis")
-
+        eeg_data.remove_artifacts(remove_art=True)
+        print("EEG Shape After removal:", eeg_data.data.shape)
         print(f"Preprocessing complete!")
         print(f"Data quality: {eeg_data.info.get('data quality', 'Unknown')}")
         print(f"Repaired channels: {eeg_data.info.get('repaired channels', 'None')}")
+        clean_duration = eeg_data.data.shape[1] / eeg_data.Fs # Result---2
+
+        # Option 2: Keep artifacts #TODO Add a helper function here later
+        # eeg_data.remove_artifacts(remove_art=False)
+        # print("Not Opted for Artifact Removal..")
+        # clean_duration = eeg_data.data.shape[1] / eeg_data.Fs # Result---2
+
+        # After define_artifacts()
+        # if 'artifacts' in eeg_data.labels:
+        #     artidx = np.where(eeg_data.labels == 'artifacts')[0]
+        #     if len(artidx) > 0 and artidx[0] < eeg_data.data.shape[0]:
+        #         # FIX: data is 2D (channels, samples), not 3D
+        #         artifact_mask = eeg_data.data[artidx[0], :] == 1  # Removed [0] indexing
+        #         artifact_percent = np.mean(artifact_mask) * 100
+        #
+        #         n_samples = eeg_data.data.shape[1]
+        #         fs = eeg_data.Fs
+        #
+        #         print(f"\n📊 Artifact Statistics:")
+        #         print(f"  Total duration: {n_samples / fs:.1f}s")
+        #         print(f"  Artifact duration: {np.sum(artifact_mask) / fs:.1f}s ({artifact_percent:.1f}%)")
+        #         print(f"  Clean duration: {np.sum(~artifact_mask) / fs:.1f}s ({100 - artifact_percent:.1f}%)")
+        #
+        #         if artifact_percent > 30:
+        #             print("  ⚠️ Warning: >30% artifacts - consider excluding artifact windows")
+        #         else:
+        #             print("  ✅ Artifact level acceptable for continuous analysis")
+        #
+        # print(f"Preprocessing complete!")
+        # print(f"Data quality: {eeg_data.info.get('data quality', 'Unknown')}")
+        # print(f"Repaired channels: {eeg_data.info.get('repaired channels', 'None')}")
 
         # %% Section 2B: Compute Band Power Features (Standardized)
         print("\n" + "=" * 60)
@@ -671,6 +693,7 @@ def process_directory(DATA_PATH):
         condratio_windows = np.zeros(n_windows)  # sigma_max / sigma_min per window
         rank_windows = np.zeros(n_windows)  # Rank per window
         sing_val_diff = np.zeros(n_windows)  # sigma_max - sigma_min per window
+        auc_per_window = np.zeros(n_windows)  # Sum of singular values per window
 
         eps = 1e-12  # small positive value for numerical safety
 
@@ -681,6 +704,7 @@ def process_directory(DATA_PATH):
             # --- 1) Singular values (no need for U, V) ---
             s = np.linalg.svd(A_w, compute_uv=False)  # shape: (26,)
             singular_values_windows[w, :] = s
+            auc_per_window[w] = s.sum()          # Per-window AUC (shape: [n_windows])
 
             # --- 2) Shannon entropy of singular values ---
             # Make all entries strictly positive to avoid log(0)
@@ -711,7 +735,7 @@ def process_directory(DATA_PATH):
 
         # %% Section 4C: Summary metrics for this recording
         print("\n" + "=" * 60)
-        print("SECTION 4C: SUMMARY METRICS FOR THIS RECORDING")
+        print("SECTION 4C: SVD BASED METRICS FOR THIS RECORDING")
         print("=" * 60)
 
         # Basic summary statistics (ignore NaNs from nearly singular windows)
@@ -720,21 +744,28 @@ def process_directory(DATA_PATH):
         H_min = np.nanmin(entropy_windows)
         H_max = np.nanmax(entropy_windows)
 
-        k_mean = np.nanmean(condratio_windows)
-        k_std = np.nanstd(condratio_windows)
-        k_min = np.nanmin(condratio_windows)
-        k_max = np.nanmax(condratio_windows)
+        svd_mean = np.nanmean(s_pos)
+        svd_std = np.nanstd(s_pos)
+        svd_min = np.nanmin(s_pos)
+        svd_max = np.nanmax(s_pos)
 
-        rank_mean=np.nanmean(rank_windows)
-        rank_std = np.nanstd(rank_windows)
-        rank_min = np.nanmin(rank_windows)
-        rank_max = np.nanmax(rank_windows)
+        k_log_mean = np.nanmean(condratio_windows)
+        k_log_std = np.nanstd(condratio_windows)
+        k_log_min = np.nanmin(condratio_windows)
+        k_log_max = np.nanmax(condratio_windows)
+
+        total_AUC_mean = np.mean(auc_per_window)    # Mean AUC across all windows (scalar)
+        total_AUC_std = np.nanstd(auc_per_window)  # SVD AUC across all windows (scalar)
+        total_AUC_min = np.nanmin(auc_per_window) # Min AUC across all windows (scalar)
+        total_AUC_max = np.nanmax(auc_per_window) # Max AUC across all windows (scalar)
 
         sing_val_diff_mean=np.nanmean(sing_val_diff)
         sing_val_diff_std = np.nanstd(sing_val_diff)
 
         print(f"Entropy  -> mean: {H_mean:.3f}, std: {H_std:.3f}, min: {H_min:.3f}, max: {H_max:.3f}")
-        print(f"CondRatio-> mean: {k_mean:.3f}, std: {k_std:.3f}, min: {k_min:.3f}, max: {k_max:.3f}")
+        print(f"CondRatio-> mean: {k_log_mean:.3f}, std: {k_log_std:.3f}, min: {k_log_min:.3f}, max: {k_log_max:.3f}")
+        print(f"SVD AUC  -> mean: {total_AUC_mean:.3f}, std: {total_AUC_std:.3f}, min: {total_AUC_min:.3f}, max: {total_AUC_max:.3f}")
+        print(f"SVD Diff -> mean: {sing_val_diff_mean:.3f}, std: {sing_val_diff_std:.3f}")
 
         # ---------------------------------------------------------
         # SECTION 4D: Per-subject line charts (Entropy & CondRatio)
@@ -748,38 +779,52 @@ def process_directory(DATA_PATH):
 
         plot_path = os.path.join(plots_dir, f"{PATIENT_ID}_Ametrics_timeseries.png")
 
+        from matplotlib.ticker import ScalarFormatter
+
+        def set_4_yticks(ax, data):
+            y_min, y_max = np.min(data), np.max(data)
+            y_min_r = int(np.floor(y_min))
+            y_max_r = int(np.ceil(y_max))
+            ax.set_ylim(y_min_r, y_max_r)
+            yticks = np.linspace(y_min_r, y_max_r, 4)
+            ax.set_yticks(yticks)
+            ax.yaxis.set_major_formatter(ScalarFormatter(useMathText=False))
+            ax.ticklabel_format(style='plain', axis='y', useOffset=False)
+            ax.set_yticklabels([f"{v:.2f}" for v in ax.get_yticks()])
+
         # 1x2 subplot: Entropy and Condition Ratio across windows
         plt.figure(figsize=(12, 5))
 
         # --- Top: Entropy time series ---
-        plt.subplot(3, 1, 1)
-        plt.plot(entropy_windows)
-        plt.title(f"Entropy per Window\n{PATIENT_ID}")
-        plt.xlabel("Window index")
-        plt.ylabel("Shannon Entropy (bits)")
-        plt.grid(True)
+        ax1 = plt.subplot(3, 1, 1)
+        ax1.plot(entropy_windows)
+        ax1.set_title(f"Entropy per Window\n{PATIENT_ID}")
+        ax1.set_xlabel("Window index")
+        ax1.set_ylabel("Shannon Entropy (bits)")
+        ax1.grid(True)
+        set_4_yticks(ax1, entropy_windows)
 
         # --- Middle: Condition ratio time series ---
-        plt.subplot(3, 1, 2)
-        plt.plot(condratio_windows)
-        plt.title(f"Condition Ratio per Window\n{PATIENT_ID}")
-        plt.xlabel("Window index")
-        plt.ylabel("σ_max / σ_min")
-        plt.yscale("log")  # helpful if ratios vary over orders of magnitude
-        plt.grid(True)
+        ax2 = plt.subplot(3, 1, 2)
+        ax2.plot(condratio_windows)
+        ax2.set_title(f"Condition Ratio per Window\n{PATIENT_ID}")
+        ax2.set_xlabel("Window index")
+        ax2.set_ylabel("σ_max / σ_min")
+        ax2.grid(True)
+        set_4_yticks(ax2, condratio_windows)
 
-        # --- Bottom: Rank time series ---
-        plt.subplot(3, 1, 3)
-        plt.plot(rank_windows)
-        plt.title(f"Rank per Window\n{PATIENT_ID}")
-        plt.xlabel("Window index")
-        plt.ylabel("Rank")
-        plt.grid(True)
-
+        # --- Bottom: SVD Sum time series ---
+        ax3 = plt.subplot(3, 1, 3)
+        ax3.plot(auc_per_window)
+        ax3.set_title("Singular Value Sum per Window")
+        ax3.set_xlabel("Window Index")
+        ax3.set_ylabel("Σ singular values")
+        ax3.grid(True)
+        set_4_yticks(ax3, auc_per_window)
 
         plt.tight_layout()
         plt.savefig(os.path.join(OUTPUT_PATH, f'{PATIENT_ID}_A-Mat_SVD.png'),
-                     dpi=150, bbox_inches='tight')
+                     dpi=300, bbox_inches='tight')
         plt.close()
 
         print(f"Saved per-subject A-metrics SVD Feature time-series plot to:\n  {OUTPUT_PATH}")
@@ -1045,7 +1090,7 @@ def process_directory(DATA_PATH):
         # 1. Estimate multivariate log-normal model
         # ----------------------------------
         mu_vec, cov_mat, log_energy_windows = extract_multivariate_lognormal_energy(
-            eeg=data_reconstructed,  # shape (26, n_samples)
+            eeg=data_clean,  # shape (26, n_samples)
             fs_hz=fs,
             window_ms=window_length*1000,
             step_ms=window_length*1000,
@@ -2006,15 +2051,24 @@ def process_directory(DATA_PATH):
             "H_std": H_std,
             "H_min": H_min,
             "H_max": H_max,
-            "k_mean": k_mean,
-            "k_std": k_std,
-            "k_min": k_min,
-            "k_max": k_max,
-            "rank_mean": rank_mean,
-            "rank_std": rank_std,
+
+            "k_log_mean":k_log_mean,
+            "k_log_std": k_log_std,
+            "k_log_min": k_log_min,
+            "k_log_max": k_log_max,
+
+            "svd_mean": svd_mean,
+            "svd_std": svd_std,
+            "svd_min": svd_min,
+            "svd_max": svd_max,
+
+            "total_AUC_mean": total_AUC_mean,
+            "total_AUC_std": total_AUC_std,
+            "total_AUC_min": total_AUC_min,
+            "total_AUC_max": total_AUC_max,
+
             "sing_val_diff_mean": sing_val_diff_mean,
             "sing_val_diff_std": sing_val_diff_std
-
         }
 
         # Append log-normal features (AFTER)

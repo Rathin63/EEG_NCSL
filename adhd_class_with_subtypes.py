@@ -64,7 +64,11 @@ FEATURES = [
     "TBR",
     "CPO Sink (Good)",
     "AI_FT_Good",
-    "H_mean"
+    "H_mean",
+    "logn_coupling_factor",
+    "logn_stability",
+    "logn_eig_entropy",
+    "logn_sigma_std"
     ]
 
 # Output folder

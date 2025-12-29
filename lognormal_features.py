@@ -34,6 +34,7 @@ def extract_lognormal_cov_features(mu, sigma, cov_mat, log_energy_windows, eps=1
 
     auto_var_mean = np.mean(diag)
     cross_cov_mean = np.sum(np.abs(off_diag)) / (n * (n - 1))
+    cross_cov_mean_signed = np.sum(off_diag) / (n * (n - 1))
     trace_cov = np.trace(cov_mat)
 
     eigvals = np.linalg.eigvalsh(cov_mat)
@@ -99,36 +100,53 @@ def extract_lognormal_cov_features(mu, sigma, cov_mat, log_energy_windows, eps=1
     # 2. (1 − KSPR) × Jensen–Shannon Divergence
     # -----------------------------
     # Measures similarity of channel-wise distributions.
+    distribution_similarity = np.nan
+    combined_similarity = np.nan
+    S_KS = np.nan
+    S_JSD = np.nan
 
     if log_energy_windows is not None:
+
         ks_pvals = []
         js_divs = []
+        ks_sims = []
+        js_sims = []
 
         for i in range(n):
             for j in range(i + 1, n):
-                # KS test between channel distributions
-                _, pval = ks_2samp(
+                # ---------- KS ----------
+                D, pval = ks_2samp(
                     log_energy_windows[:, i],
                     log_energy_windows[:, j]
                 )
                 ks_pvals.append(pval)
+                ks_sims.append(1.0 - D)  # similarity
 
-                # Jensen–Shannon divergence (histogram-based)
-                hist_i, _ = np.histogram(log_energy_windows[:, i], bins=50, density=True)
-                hist_j, _ = np.histogram(log_energy_windows[:, j], bins=50, density=True)
+                # ---------- JS ----------
+                hist_i, _ = np.histogram(log_energy_windows[:, i],
+                                         bins=50, density=True)
+                hist_j, _ = np.histogram(log_energy_windows[:, j],
+                                         bins=50, density=True)
 
                 hist_i += eps
                 hist_j += eps
 
                 js = jensenshannon(hist_i, hist_j)
-                js_divs.append(js)
 
+                js_divs.append(js)  # divergence
+                js_sims.append(1.0 - js)  # similarity
+
+        # ---- Old metric ----
         kspr_mean = np.mean(ks_pvals)
         jd_mean = np.mean(js_divs)
-
         distribution_similarity = (1.0 - kspr_mean) * jd_mean
-    else:
-        distribution_similarity = np.nan
+
+        # ---- New similarity metrics ----
+        S_KS = np.mean(ks_sims)
+        S_JSD = np.mean(js_sims)
+
+        w = 0.5
+        combined_similarity = w * S_JSD + (1 - w) * S_KS
 
     # -----------------------------
     # 3. Coupling Factor
@@ -136,8 +154,12 @@ def extract_lognormal_cov_features(mu, sigma, cov_mat, log_energy_windows, eps=1
     # Fraction of total covariance energy coming from off-diagonal terms.
 
     total_cov_sum = np.sum(np.abs(cov_mat)) + eps
+    total_cov_sum_sign = np.sum(cov_mat) + eps
     off_diag_sum = np.sum(np.abs(off_diag))
+    off_diag_sum_sign = np.sum(off_diag) + eps
     coupling_factor = off_diag_sum / total_cov_sum
+    # Alternative (signed)
+    coupling_factor_signed = off_diag_sum_sign / total_cov_sum_sign
 
     # -----------------------------
     # 4. Stability metric (diagonal rigidity)
@@ -151,6 +173,7 @@ def extract_lognormal_cov_features(mu, sigma, cov_mat, log_energy_windows, eps=1
     return {
         "auto_var_mean": auto_var_mean,
         "cross_cov_mean": cross_cov_mean,
+        "cross_cov_mean_signed": cross_cov_mean_signed,
         "trace_cov": trace_cov,
         "lambda_max": lambda_max,
         "eig_entropy": eig_entropy,
@@ -162,6 +185,10 @@ def extract_lognormal_cov_features(mu, sigma, cov_mat, log_energy_windows, eps=1
         # New features
         "log_likelihood_mean": log_likelihood_mean,
         "distribution_similarity": distribution_similarity,
+        "combined_similarity": combined_similarity,
+        "S_KS": S_KS,
+        "S_JSD": S_JSD,
         "coupling_factor": coupling_factor,
+        "coupling_factor_signed": coupling_factor_signed,
         "stability": stability,
     }

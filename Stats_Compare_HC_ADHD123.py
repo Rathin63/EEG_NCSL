@@ -17,17 +17,18 @@ file_ADHD_Med  = r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Samp
 file_ADHD_High = r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Sample\diff_data2\ADHD\ADHD_High\Results\BatchSummary_ADHD_High.xlsx"
 
 # Columns to compare (Excel-style numbering, excluding ID)
-columns_to_compare = [
-    5, 7, 10, 11, 16, 24, 25,
-    *range(40, 48), *range(52, 66)
-]
-# columns_to_compare = list(range(5, 27))  # alternative
+#columns_to_compare = [
+#    5, 7, 10, 11, 16, 24, 25,
+#    *range(40, 48), 50,51,*range(52, 68)
+#]
+df = pd.read_excel(file_HC)
+columns_to_compare = list(range(4, df.shape[1]))
 
 # Output file (4-group stats)
 output_file = r"E:\JHU_Postdoc\Research\EEG\Stats_Compare_4Groups_AUC.xlsx"
 
 # Convert to zero-based indices
-columns_to_compare = [c - 1 for c in columns_to_compare]
+#columns_to_compare = [c - 1 for c in columns_to_compare]
 
 
 # ============================================================
