@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -16,16 +17,12 @@ file_ADHD_Low  = r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Samp
 file_ADHD_Med  = r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Sample\diff_data2\ADHD\ADHD_Med\Results\BatchSummary_ADHD_Med.xlsx"
 file_ADHD_High = r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Sample\diff_data2\ADHD\ADHD_High\Results\BatchSummary_ADHD_High.xlsx"
 
-# Columns to compare (Excel-style numbering, excluding ID)
-#columns_to_compare = [
-#    5, 7, 10, 11, 16, 24, 25,
-#    *range(40, 48), 50,51,*range(52, 68)
-#]
 df = pd.read_excel(file_HC)
 columns_to_compare = list(range(4, df.shape[1]))
 
 # Output file (4-group stats)
 output_file = r"E:\JHU_Postdoc\Research\EEG\Stats_Compare_4Groups_AUC.xlsx"
+BATCH_OUTPUT_PATH = r"E:\JHU_Postdoc\Research\EEG"
 
 # Convert to zero-based indices
 #columns_to_compare = [c - 1 for c in columns_to_compare]
@@ -364,6 +361,9 @@ for feat in features_for_boxplot:
         print(f"Skipping boxplots for {feat}: at least one group empty.")
         continue
 
+    FEATURE_COMPARE_DIR = os.path.join(BATCH_OUTPUT_PATH, "feature_compare_4class")
+    os.makedirs(FEATURE_COMPARE_DIR, exist_ok=True)
+
     # ============================================================
     # 4-BOX PLOT: HC vs Low vs Med vs High
     # ============================================================
@@ -410,9 +410,18 @@ for feat in features_for_boxplot:
         bbox=dict(boxstyle="round", alpha=0.25),
     )
 
-    plt.tight_layout()
-    plt.show()
+    save_path_4grp = os.path.join(
+        FEATURE_COMPARE_DIR,
+        f"{feat}_HC_vs_Low_Med_High.png"
+    )
 
+    plt.tight_layout()
+    plt.savefig(save_path_4grp, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+    FEATURE_COMPARE_DIR2 = os.path.join(BATCH_OUTPUT_PATH, "feature_compare_2class")
+    os.makedirs(FEATURE_COMPARE_DIR2, exist_ok=True)
     # ============================================================
     # 2-BOX PLOT: HC vs ADHD Combined
     # ============================================================
@@ -457,9 +466,14 @@ for feat in features_for_boxplot:
         bbox=dict(boxstyle="round", alpha=0.25),
     )
 
-    plt.tight_layout()
-    plt.show()
+    save_path_2grp = os.path.join(
+        FEATURE_COMPARE_DIR2,
+        f"{feat}_HC_vs_ADHD_All.png"
+    )
 
+    plt.tight_layout()
+    plt.savefig(save_path_2grp, dpi=150, bbox_inches="tight")
+    plt.close(fig)
 
 print("\n=================================================")
 print(" 4-GROUP + 2-CLASS Statistical Comparison Completed")

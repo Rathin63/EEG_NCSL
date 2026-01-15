@@ -32,9 +32,9 @@ def extract_lognormal_cov_features(mu, sigma, cov_mat, log_energy_windows, eps=1
     diag = np.diag(cov_mat)
     off_diag = cov_mat - np.diag(diag)
 
-    auto_var_mean = np.mean(diag)
+    #auto_var_mean = np.mean(diag)
     cross_cov_mean = np.sum(np.abs(off_diag)) / (n * (n - 1))
-    cross_cov_mean_signed = np.sum(off_diag) / (n * (n - 1))
+    #cross_cov_mean_signed = np.sum(off_diag) / (n * (n - 1))
     trace_cov = np.trace(cov_mat)
 
     eigvals = np.linalg.eigvalsh(cov_mat)
@@ -83,13 +83,24 @@ def extract_lognormal_cov_features(mu, sigma, cov_mat, log_energy_windows, eps=1
         log_likelihood = mvn.logpdf(log_energy_windows)
 
         # Mean log-likelihood across windows
-        log_likelihood_mean = np.mean(log_likelihood)
+        ll_mean = np.mean(log_likelihood)
+        ll_std = np.std(log_likelihood)
+        ll_p05 = np.percentile(log_likelihood, 5)
 
         # Safety clip to avoid numerical explosions
-        log_likelihood_mean = np.clip(log_likelihood_mean, -1e6, 1e6)
+        # log_likelihood_mean = np.clip(log_likelihood_mean, -1e6, 1e6)
 
     else:
         log_likelihood_mean = np.nan
+
+    # import matplotlib.pyplot as plt
+    # plt.close()
+    # plt.hist(log_likelihood, bins=40)
+    # plt.xlabel("Log-likelihood")
+    # plt.ylabel("Count")
+    # plt.title("Distribution of log-likelihood across windows")
+    # plt.savefig("loglikelihood_hist.png", dpi=200, bbox_inches='tight')
+    # plt.close()
 
     # NOTE:
     # Min–max normalization must be done ACROSS SUBJECTS.
@@ -107,29 +118,30 @@ def extract_lognormal_cov_features(mu, sigma, cov_mat, log_energy_windows, eps=1
 
     if log_energy_windows is not None:
 
-        ks_pvals = []
         js_divs = []
         ks_sims = []
         js_sims = []
 
         for i in range(n):
             for j in range(i + 1, n):
+
                 # ---------- KS ----------
-                D, pval = ks_2samp(
+                D, _ = ks_2samp(
                     log_energy_windows[:, i],
                     log_energy_windows[:, j]
                 )
-                ks_pvals.append(pval)
+                #ks_pvals.append(pval)
                 ks_sims.append(1.0 - D)  # similarity
 
                 # ---------- JS ----------
-                hist_i, _ = np.histogram(log_energy_windows[:, i],
-                                         bins=50, density=True)
-                hist_j, _ = np.histogram(log_energy_windows[:, j],
-                                         bins=50, density=True)
+                hist_i, _ = np.histogram(log_energy_windows[:, i], bins=50, density=True)
+                hist_j, _ = np.histogram(log_energy_windows[:, j], bins=50, density=True)
 
-                hist_i += eps
-                hist_j += eps
+                hist_i = hist_i.astype(float) + eps
+                hist_j = hist_j.astype(float) + eps
+
+                hist_i /= np.sum(hist_i)
+                hist_j /= np.sum(hist_j)
 
                 js = jensenshannon(hist_i, hist_j)
 
@@ -137,43 +149,56 @@ def extract_lognormal_cov_features(mu, sigma, cov_mat, log_energy_windows, eps=1
                 js_sims.append(1.0 - js)  # similarity
 
         # ---- Old metric ----
-        kspr_mean = np.mean(ks_pvals)
-        jd_mean = np.mean(js_divs)
-        distribution_similarity = (1.0 - kspr_mean) * jd_mean
-
-        # ---- New similarity metrics ----
         S_KS = np.mean(ks_sims)
         S_JSD = np.mean(js_sims)
+        distribution_similarity = S_KS * S_JSD
 
+        # ---- New combined metric ----
         w = 0.5
-        combined_similarity = w * S_JSD + (1 - w) * S_KS
+        combined_similarity = w * S_JSD + (1 - w) * S_KS  # 75% JSD, 25% KS  (your current choice)
 
     # -----------------------------
-    # 3. Coupling Factor
+    # 3. Stability metric (diagonal rigidity) & 4. Coupling Factor
     # -----------------------------
-    # Fraction of total covariance energy coming from off-diagonal terms.
+    # Coupling: Fraction of total covariance energy coming from off-diagonal terms.
 
-    total_cov_sum = np.sum(np.abs(cov_mat)) + eps
-    total_cov_sum_sign = np.sum(cov_mat) + eps
-    off_diag_sum = np.sum(np.abs(off_diag))
-    off_diag_sum_sign = np.sum(off_diag) + eps
-    coupling_factor = off_diag_sum / total_cov_sum
-    # Alternative (signed)
-    coupling_factor_signed = off_diag_sum_sign / total_cov_sum_sign
+    # ----------------------------
+    # Separate diagonal and off-diagonal
+    # ----------------------------
+    diag = np.diag(cov_mat)                   # variances (>= 0 in theory)
+    off_diag = cov_mat - np.diag(diag)        # pure covariances
 
-    # -----------------------------
-    # 4. Stability metric (diagonal rigidity)
-    # -----------------------------
-    # High when diagonal variances are strong and homogeneous.
+    off_mask = ~np.eye(n, dtype=bool)         # Mask for off-diagonal entries
 
-    diag_mean = np.mean(diag)
+    # ----------------------------
+    # Diagonal statistics (self-energy)
+    # ----------------------------
+    diag_mean = np.mean(diag)                    # Mean variance across channels (self-energy)
     diag_std = np.std(diag) + eps
-    stability = 1.0 - (1.0 / (1.0 + diag_mean / diag_std))
 
+    # Stability: bounded, smooth measure of variance homogeneity
+    # High when variances are similar across channels
+    stability = diag_mean / (diag_mean + diag_std)
+
+    # Efficiency: penalizes variance dispersion
+    # Can be < 0 if dispersion dominates (allowed, informative)
+    efficiency = 1.0 - (diag_std / (diag_mean + eps))
+
+    # ----------------------------
+    # Coupling metrics (interaction strength)
+    # ----------------------------
+    offdiag_mean = np.mean(np.abs(off_diag[off_mask]))
+    offdiag_sum = np.sum(np.abs(off_diag))
+
+    diag_sum = np.sum(diag)
+
+    # Mean-based coupling (PRIMARY, N-invariant)
+    coupling_mean = offdiag_mean / (diag_mean + offdiag_mean + eps)
+
+    # Sum-based coupling (SECONDARY, interaction mass)
+    coupling_sum = offdiag_sum / (diag_sum + offdiag_sum + eps)
     return {
-        "auto_var_mean": auto_var_mean,
         "cross_cov_mean": cross_cov_mean,
-        "cross_cov_mean_signed": cross_cov_mean_signed,
         "trace_cov": trace_cov,
         "lambda_max": lambda_max,
         "eig_entropy": eig_entropy,
@@ -182,13 +207,30 @@ def extract_lognormal_cov_features(mu, sigma, cov_mat, log_energy_windows, eps=1
         "sigma_mean": sigma_mean,
         "sigma_std": sigma_std,
 
-        # New features
-        "log_likelihood_mean": log_likelihood_mean,
+        # New features for log-likelihood and distribution similarity
+        "ll_mean": ll_mean,
+        "ll_std": ll_std,
+        "ll_p05": ll_p05,
         "distribution_similarity": distribution_similarity,
         "combined_similarity": combined_similarity,
         "S_KS": S_KS,
         "S_JSD": S_JSD,
-        "coupling_factor": coupling_factor,
-        "coupling_factor_signed": coupling_factor_signed,
+
+        # Stability and Coupling features
+        # Self-energy descriptors
+        #"diag_mean": diag_mean,
+        "diag_std": diag_std,
+
+        # Network organization
         "stability": stability,
+        "efficiency": efficiency,
+
+        # Coupling
+        "coupling_mean": coupling_mean,
+        "coupling_sum": coupling_sum,
+
+        # Raw interaction magnitudes (optional diagnostics)
+        "offdiag_mean": offdiag_mean,
+        "offdiag_sum": offdiag_sum,
+        "diag_sum": diag_sum,
     }

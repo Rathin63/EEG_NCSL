@@ -33,7 +33,7 @@ def extract_multivariate_lognormal_energy(
     window_ms: float = 125.0,
     step_ms: Optional[float]= None,
     eps: float = 1e-12,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Parameters
     ----------
@@ -83,8 +83,8 @@ def extract_multivariate_lognormal_energy(
         seg = eeg[:, start:end]
         energy[:, w] = np.sum(seg ** 2, axis=1)
 
-    # 2. Channel-wise normalization
-    max_energy = np.max(energy, axis=1, keepdims=True)
+    # 2. Window-wise normalization
+    max_energy = np.max(energy, axis=0, keepdims=True)
     max_energy[max_energy == 0] = eps
     energy_norm = energy / max_energy
 
@@ -98,4 +98,4 @@ def extract_multivariate_lognormal_energy(
 
 
 
-    return mu_vec, cov_mat, log_energy_windows
+    return mu_vec, cov_mat, log_energy_windows, energy

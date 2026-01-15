@@ -30,6 +30,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+from pathlib import Path
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
@@ -48,6 +49,8 @@ from sklearn.metrics import (
     f1_score,
 )
 
+from feature_selection import select_optimal_features
+
 # -------------------------------------------------------------------
 # USER SETTINGS  (EDIT THIS BLOCK)
 # -------------------------------------------------------------------
@@ -61,15 +64,32 @@ file_ADHD_High = r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Samp
 # EXACT feature names as they appear in Excel
 # (Example – change to match your BatchSummary headers)
 FEATURES = [
-    "TBR",
-    "CPO Sink (Good)",
-    "AI_FT_Good",
-    "H_mean",
-    "logn_coupling_factor",
-    "logn_stability",
-    "logn_eig_entropy",
-    "logn_sigma_std"
+"logn_stability",
+"SS_lb_Central_compactness",
+"logn_efficiency",
+"logn_coupling_sum",
+"logn_eig_entropy",
+"logn_coupling_mean",
+"logn_sigma_std",
+"TBR_TBR_Ch_STD",
+"TBR_TBR_lb_CentralTemporal",
+"SS_lb_Prefrontal_compactness",
+"logn_lambda_max",
+"logn_cross_cov_mean",
+"TBR_TBR_Ch_Mean",
+"TBR_Global_TBR",
+"AI_All_Good",
+# "Band_Pct_ParietoOccipital_delta",
+# "Band_Pct_CentralTemporal_alpha",
+# "Band_Pct_Frontal_alpha"
     ]
+#automating Feature list creation
+# FEATURES = []
+excel_file = "Stats_Compare_4Groups_AUC_TwoClass_HC_vs_ADHDAll.xlsx"
+
+df = pd.read_excel(excel_file, usecols=[0])
+
+#FEATURES = df.iloc[1:, 0].dropna().astype(str).tolist()
 
 # Output folder
 BASE_DIR = os.path.dirname(file_HC)
@@ -81,7 +101,7 @@ RANDOM_STATE = 42
 
 # Number of CV folds (for both tasks)
 N_FOLDS_PRIMARY = 5   # HC vs ADHD
-N_FOLDS_SECONDARY = 5 # ADHD_Low vs ADHD_Med vs ADHD_High
+#N_FOLDS_SECONDARY = 5 # ADHD_Low vs ADHD_Med vs ADHD_High
 
 
 # -------------------------------------------------------------------
@@ -129,6 +149,220 @@ print(f"After dropping NaNs in features, N = {len(df_all)}")
 X_primary = df_all[FEATURES].astype(float).values
 y_primary = df_all["Label_main"].values
 
+# Convert to DataFrame so column names remain
+X_primary_df = pd.DataFrame(X_primary, columns=FEATURES)
+
+def generate_weight_grid(step=0.2):
+    """
+    Generate all (w_MI, w_AUC, w_D, w_IG) combinations such that:
+      - each weight ∈ {0, step, 2*step, ..., 1}
+      - sum of weights = 1
+
+    Example (step=0.2):
+      (1,0,0,0), (0.8,0.2,0,0), ..., (0,0,0,1)
+
+    Returns:
+      List of tuples: [(w_MI, w_AUC, w_D, w_IG), ...]
+    """
+    vals = [round(i * step, 10) for i in range(int(1 / step) + 1)]
+    combos = []
+
+    for w_mi in vals:
+        for w_auc in vals:
+            for w_d in vals:
+                w_ig = round(1.0 - (w_mi + w_auc + w_d), 10)
+
+                if w_ig < 0 or w_ig > 1:
+                    continue
+
+                # ensure grid alignment (avoid floating error)
+                if round(w_ig / step) * step != round(w_ig, 10):
+                    continue
+
+                combos.append((w_mi, w_auc, w_d, w_ig))
+
+    return combos
+
+def run_all_classifiers_return_metrics(X, y, models_dict, n_folds):
+    """
+    Lightweight CV runner.
+    Used ONLY during weight-grid search.
+    No plots, no files, no confusion matrices.
+    """
+    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=RANDOM_STATE)
+
+    rows = []
+
+    for name, model in models_dict.items():
+        aucs, accs = [], []
+
+        for tr, te in skf.split(X, y):
+            X_tr, X_te = X[tr], X[te]
+            y_tr, y_te = y[tr], y[te]
+
+            model.fit(X_tr, y_tr)
+            y_pred = model.predict(X_te)
+            accs.append(accuracy_score(y_te, y_pred))
+
+            if hasattr(model, "predict_proba"):
+                y_score = model.predict_proba(X_te)[:, 1]
+            else:
+                y_score = model.decision_function(X_te)
+
+            aucs.append(roc_auc_score(y_te, y_score))
+
+        rows.append({
+            "Model": name,
+            "AUC_mean": np.mean(aucs),
+            "AUC_std": np.std(aucs),
+            "ACC_mean": np.mean(accs),
+            "ACC_std": np.std(accs),
+        })
+
+    return pd.DataFrame(rows)
+
+def optimize_feature_weights(
+    df,
+    feature_cols,
+    y,
+    models_dict,
+    out_dir,
+    top_k=6
+):
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    weight_grid = generate_weight_grid(step=0.2)
+
+    rows = []
+
+    for weights in weight_grid:
+        selected = select_optimal_features(
+            X_df=df[feature_cols],
+            y=y,
+            weights=weights,
+            top_k=top_k,
+            return_selected_only=True,
+            verbose=False
+        )
+
+        X_sel = df[selected].values
+
+        cv_df = run_all_classifiers_return_metrics(
+            X_sel, y, models_dict, N_FOLDS_PRIMARY
+        )
+
+        rows.append({
+            "w_MI": weights[0],
+            "w_AUC": weights[1],
+            "w_D": weights[2],
+            "w_IG": weights[3],
+            "n_features": len(selected),
+            "features": ";".join(selected),
+            "AUC_mean_all": cv_df["AUC_mean"].mean(),
+        })
+
+    df_summary = pd.DataFrame(rows).sort_values(
+        "AUC_mean_all", ascending=False
+    )
+
+    df_summary.to_excel(
+        os.path.join(out_dir, "WeightSearch_Summary.xlsx"),
+        index=False
+    )
+
+    return df_summary.iloc[0], df_summary
+
+
+# ============================================================
+# BASE MODELS (USED ONLY FOR WEIGHT OPTIMIZATION)
+# No hyperparameter tuning here
+# ============================================================
+
+base_models = {
+    "LogReg": Pipeline([
+        ("scaler", StandardScaler()),
+        ("clf", LogisticRegression(
+            max_iter=1000,
+            C=1.0,
+            penalty="l2",
+            solver="lbfgs",
+            random_state=RANDOM_STATE
+        ))
+    ]),
+
+    "RandomForest": RandomForestClassifier(
+        n_estimators=200,
+        max_depth=None,
+        min_samples_split=2,
+        min_samples_leaf=1,
+        random_state=RANDOM_STATE
+    ),
+
+    "SVM_RBF": Pipeline([
+        ("scaler", StandardScaler()),
+        ("clf", SVC(
+            kernel="rbf",
+            C=1.0,
+            gamma=0.1,
+            probability=True,
+            random_state=RANDOM_STATE
+        ))
+    ]),
+
+    "kNN": Pipeline([
+        ("scaler", StandardScaler()),
+        ("clf", KNeighborsClassifier(
+            n_neighbors=5,
+            weights="distance"
+        ))
+    ]),
+
+    "NaiveBayes": Pipeline([
+        ("scaler", StandardScaler()),
+        ("clf", GaussianNB())
+    ]),
+
+    "MLP_NN": Pipeline([
+        ("scaler", StandardScaler()),
+        ("clf", MLPClassifier(
+            hidden_layer_sizes=(32,),
+            activation="relu",
+            alpha=1e-4,
+            learning_rate_init=1e-3,
+            max_iter=1000,
+            early_stopping=True,
+            random_state=RANDOM_STATE
+        ))
+    ])
+}
+
+
+# ============================================================
+# PHASE 1: Weight optimization (AFTER model definitions)
+# ============================================================
+
+best_row, weight_table = optimize_feature_weights(
+    df=df_all,
+    feature_cols=FEATURES,
+    y=y_primary,
+    models_dict=base_models,
+    out_dir=os.path.join(OUT_DIR, "WeightSearch"),
+    top_k=6
+)
+
+BEST_WEIGHTS = (
+    best_row["w_MI"],
+    best_row["w_AUC"],
+    best_row["w_D"],
+    best_row["w_IG"]
+)
+
+selected_features = best_row["features"].split(";")
+
+print("\nBEST WEIGHTS:", BEST_WEIGHTS)
+print("BEST FEATURES:", selected_features)
+
 # Load data
 # Prepare X_primary, y_primary
 # -------------- INSERT TUNING HERE --------------
@@ -138,6 +372,10 @@ y_primary = df_all["Label_main"].values
 # ============================================================
 # HYPERPARAMETER TUNING (SVM-RBF, RandomForest, MLP-NN)
 # ============================================================
+
+X_primary = df_all[selected_features].values
+print("Final selected features:", selected_features)
+
 
 from sklearn.model_selection import GridSearchCV, StratifiedKFold
 
@@ -235,15 +473,15 @@ print("\n=== Hyperparameter Tuning Completed ===")
 
 
 # Secondary task: ADHD subclass only
-df_adhd_only = df_all[df_all["Label_main"] == 1].copy()
-subclass_map = {"Low": 0, "Med": 1, "High": 2}  # internal encoding
-df_adhd_only["Subclass_int"] = df_adhd_only["Label_subclass"].map(subclass_map)
-
-X_secondary = df_adhd_only[FEATURES].astype(float).values
-y_secondary = df_adhd_only["Subclass_int"].values
-
-print(f"ADHD-only subjects for subclass task: {len(df_adhd_only)} "
-      f"(Low={sum(y_secondary==0)}, Med={sum(y_secondary==1)}, High={sum(y_secondary==2)})")
+# df_adhd_only = df_all[df_all["Label_main"] == 1].copy()
+# subclass_map = {"Low": 0, "Med": 1, "High": 2}  # internal encoding
+# df_adhd_only["Subclass_int"] = df_adhd_only["Label_subclass"].map(subclass_map)
+#
+# X_secondary = df_adhd_only[FEATURES].astype(float).values
+# y_secondary = df_adhd_only["Subclass_int"].values
+#
+# print(f"ADHD-only subjects for subclass task: {len(df_adhd_only)} "
+#       f"(Low={sum(y_secondary==0)}, Med={sum(y_secondary==1)}, High={sum(y_secondary==2)})")
 
 
 # -------------------------------------------------------------------
@@ -264,10 +502,10 @@ models = {
     ]),
 
     "RandomForest": RandomForestClassifier(
-        n_estimators=300,    # TUNE HERE (number of trees)
-        max_depth=None,      # TUNE HERE (tree depth; None = full)
-        min_samples_split=2, # TUNE HERE
-        min_samples_leaf=1,  # TUNE HERE
+        n_estimators=grid_rf.best_params_["n_estimators"],    # TUNE HERE (number of trees)
+        max_depth=grid_rf.best_params_["max_depth"],      # TUNE HERE (tree depth; None = full)
+        min_samples_split=grid_rf.best_params_["min_samples_split"], # TUNE HERE
+        min_samples_leaf=grid_rf.best_params_["min_samples_leaf"],  # TUNE HERE
         random_state=RANDOM_STATE
     ),
 
@@ -275,8 +513,8 @@ models = {
         ("scaler", StandardScaler()),
         ("clf", SVC(
             kernel="rbf",
-            C=1.0,          # TUNE HERE (margin softness)
-            gamma="scale",  # TUNE HERE (RBF width)
+            C=grid_svm.best_params_["clf__C"],          # TUNE HERE (margin softness)
+            gamma=grid_svm.best_params_["clf__gamma"],  # TUNE HERE (RBF width)
             probability=True,
             random_state=RANDOM_STATE
         ))
@@ -298,11 +536,11 @@ models = {
     "MLP_NN": Pipeline([
         ("scaler", StandardScaler()),
         ("clf", MLPClassifier(
-            hidden_layer_sizes=(16, 8),  # Smaller network
-            activation="relu",
+            hidden_layer_sizes=grid_mlp.best_params_["clf__hidden_layer_sizes"],  # Smaller network
+            activation=grid_mlp.best_params_["clf__activation"],
             solver="adam",
-            alpha=1e-3,
-            learning_rate_init=0.005,
+            alpha=grid_mlp.best_params_["clf__alpha"],
+            learning_rate_init=grid_mlp.best_params_["clf__learning_rate_init"],
             early_stopping=True,
             n_iter_no_change=20,
             max_iter=2000,
@@ -418,21 +656,21 @@ best_model_primary = models[best_model_name_primary]
 # SECONDARY TASK: ADHD_Low vs ADHD_Med vs ADHD_High
 # -------------------------------------------------------------------
 
-cv_secondary = evaluate_models_cv(
-    X_secondary, y_secondary,
-    models_dict=models,
-    n_folds=N_FOLDS_SECONDARY,
-    task_name="Secondary (ADHD subclass: Low/Med/High)",
-    is_multiclass=True
-)
-
-secondary_csv = os.path.join(OUT_DIR, "cv_secondary_ADHD_subclass.csv")
-cv_secondary.to_csv(secondary_csv, index=False)
-print(f"\nSecondary CV results saved to: {secondary_csv}")
-
-best_model_name_secondary = cv_secondary.iloc[0]["Model"]
-print(f"\nBest secondary model by AUC: {best_model_name_secondary}")
-best_model_secondary = models[best_model_name_secondary]
+# cv_secondary = evaluate_models_cv(
+#     X_secondary, y_secondary,
+#     models_dict=models,
+#     n_folds=N_FOLDS_SECONDARY,
+#     task_name="Secondary (ADHD subclass: Low/Med/High)",
+#     is_multiclass=True
+# )
+#
+# secondary_csv = os.path.join(OUT_DIR, "cv_secondary_ADHD_subclass.csv")
+# cv_secondary.to_csv(secondary_csv, index=False)
+# print(f"\nSecondary CV results saved to: {secondary_csv}")
+#
+# best_model_name_secondary = cv_secondary.iloc[0]["Model"]
+# print(f"\nBest secondary model by AUC: {best_model_name_secondary}")
+# best_model_secondary = models[best_model_name_secondary]
 
 
 # -------------------------------------------------------------------
@@ -501,30 +739,30 @@ print(f"Primary confusion matrix + report saved to: {cm_primary_path}")
 # CONFUSION MATRIX + REPORT FOR BEST SECONDARY MODEL
 # -------------------------------------------------------------------
 
-# Train/test split within ADHD subjects only
-X_train_s, X_test_s, y_train_s, y_test_s = train_test_split(
-    X_secondary, y_secondary,
-    test_size=0.3, stratify=y_secondary, random_state=RANDOM_STATE
-)
+# # Train/test split within ADHD subjects only
+# X_train_s, X_test_s, y_train_s, y_test_s = train_test_split(
+#     X_secondary, y_secondary,
+#     test_size=0.3, stratify=y_secondary, random_state=RANDOM_STATE
+# )
+#
+# best_model_secondary.fit(X_train_s, y_train_s)
+# y_pred_secondary = best_model_secondary.predict(X_test_s)
+#
+# cm_secondary = confusion_matrix(y_test_s, y_pred_secondary)
+# target_names_sub = ["Low", "Med", "High"]
+# report_secondary = classification_report(
+#     y_test_s, y_pred_secondary, target_names=target_names_sub
+# )
 
-best_model_secondary.fit(X_train_s, y_train_s)
-y_pred_secondary = best_model_secondary.predict(X_test_s)
-
-cm_secondary = confusion_matrix(y_test_s, y_pred_secondary)
-target_names_sub = ["Low", "Med", "High"]
-report_secondary = classification_report(
-    y_test_s, y_pred_secondary, target_names=target_names_sub
-)
-
-cm_secondary_path = os.path.join(OUT_DIR, "secondary_confusion_and_report.txt")
-with open(cm_secondary_path, "w") as f:
-    f.write(f"Best model (secondary): {best_model_name_secondary}\n\n")
-    f.write("Confusion Matrix (ADHD subclass: Low/Med/High):\n")
-    f.write(str(cm_secondary) + "\n\n")
-    f.write("Classification report:\n")
-    f.write(report_secondary)
-
-print(f"Secondary confusion matrix + report saved to: {cm_secondary_path}")
+# cm_secondary_path = os.path.join(OUT_DIR, "secondary_confusion_and_report.txt")
+# with open(cm_secondary_path, "w") as f:
+#     f.write(f"Best model (secondary): {best_model_name_secondary}\n\n")
+#     f.write("Confusion Matrix (ADHD subclass: Low/Med/High):\n")
+#     f.write(str(cm_secondary) + "\n\n")
+#     f.write("Classification report:\n")
+#     f.write(report_secondary)
+#
+# print(f"Secondary confusion matrix + report saved to: {cm_secondary_path}")
 
 
 # -------------------------------------------------------------------
@@ -533,10 +771,11 @@ print(f"Secondary confusion matrix + report saved to: {cm_secondary_path}")
 
 # Random Forest importance (primary)
 if "RandomForest" in models:
+    X_sel = df_all[selected_features].values
     rf = models["RandomForest"]
-    rf.fit(X_primary, y_primary)
+    rf.fit(X_sel, y_primary)
     rf_importance = pd.DataFrame({
-        "Feature": FEATURES,
+        "Feature": selected_features,
         "Importance": rf.feature_importances_
     }).sort_values("Importance", ascending=False)
 
@@ -546,13 +785,14 @@ if "RandomForest" in models:
 
 # Logistic Regression coefficients (primary)
 if "LogReg" in models:
+    X_sel = df_all[selected_features].values
     lr = models["LogReg"]
-    lr.fit(X_primary, y_primary)
+    lr.fit(X_sel, y_primary)
     clf_lr = lr.named_steps["clf"]
     coefs = clf_lr.coef_[0]
 
     lr_importance = pd.DataFrame({
-        "Feature": FEATURES,
+        "Feature": selected_features,
         "Coefficient": coefs
     }).sort_values("Coefficient", ascending=False)
 

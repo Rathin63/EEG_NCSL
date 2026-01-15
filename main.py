@@ -12,6 +12,7 @@ import pandas as pd
 import os
 from pathlib import Path
 import seaborn as sns
+import traceback
 import time
 
 # Matplotlib (batch-safe)
@@ -26,6 +27,8 @@ import scipy
 from scipy.signal import welch
 from scipy.stats import lognorm, norm
 
+from get_save_path import get_save_path   # Custom function to get analysis wise save paths
+
 # Import preprocessing modules
 import sys
 
@@ -34,14 +37,25 @@ sys.path.insert(0, os.path.join(os.getcwd(), 'preprocessing', 'TDBRAIN'))
 
 from preprocessing.TDBRAIN.autopreprocessing import dataset as ds
 
-# List of input directories (one per run)
-input_dirs = [
-    #r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Sample\diff_data2", #Uncomment to process a trial for a new change
-    r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Sample\diff_data2\HC",
-    r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Sample\diff_data2\ADHD\ADHD_Low",
-    r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Sample\diff_data2\ADHD\ADHD_Med",
-    r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Sample\diff_data2\ADHD\ADHD_High",
-]
+
+DEBUG_MODE = True   # True = debug (single test folder)
+                    # False = full run
+
+if DEBUG_MODE:
+    # Debug / trial mode (process parent folder / subset)
+    input_dirs = [
+        r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Sample\diff_data2"
+    ]
+else:
+    # Normal full processing mode
+    # List of input directories (one per run)
+    input_dirs = [
+        r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Sample\diff_data2\HC",
+        r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Sample\diff_data2\ADHD\ADHD_Low",
+        r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Sample\diff_data2\ADHD\ADHD_Med",
+        r"E:\JHU_Postdoc\Research\TDBrain\TD_BRAIN_code\BRAIN_code\Sample\diff_data2\ADHD\ADHD_High",
+    ]
+
 
 valid_dirs = []
 total_csv_files = 0
@@ -151,7 +165,7 @@ def process_directory(DATA_PATH):
         eeg_data.detect_jumps()
 
         # Detect kurtosis artifacts
-        #print("Detecting kurtosis artifacts...")
+        print("Detecting kurtosis artifacts...")
         #eeg_data.detect_kurtosis()
 
         # Detect extreme voltage swings
@@ -253,6 +267,7 @@ def process_directory(DATA_PATH):
 
         print("Computing PSD using Welch method...")
 
+        #Per Channel PSD and Band Power Calculation
         for ch in range(n_channels):
 
             freqs, psd = welch(
@@ -263,7 +278,7 @@ def process_directory(DATA_PATH):
                 scaling='density'
             )
 
-            # Total spectral power
+            # Total spectral power per channel
             total_power[ch] = np.trapz(psd, freqs)
 
             # Compute band powers
@@ -298,6 +313,63 @@ def process_directory(DATA_PATH):
         print(f"  Mean TBR: {np.nanmean(TBR):.3f}")
         print(f"  TBR range: [{np.nanmin(TBR):.3f}, {np.nanmax(TBR):.3f}]")
         mean_TBR_val = np.nanmean(TBR) # Result---3
+        std_TBR_val = np.nanstd(TBR)
+
+        # -------- LOBE MATRICES --------
+
+        from spectral_analysis import compute_lobe_band_matrices
+
+        abs_matrix, pct_matrix, lobes, band_order = compute_lobe_band_matrices(
+            band_power=band_power,
+            band_power_percent=band_power_percent,
+            eeg_labels=eeg_data.labels[:26]
+        )
+
+        # ======================TEMP storage for lobe–band percentage features======================================
+
+        band_pct_features = {}
+
+        # -----------------Extract Band_Pct_[Lobe]_[Band]-------------------------------------------
+
+        for i, lobe in enumerate(lobes):
+            lobe_clean = lobe.replace(" ", "_").replace("-", "_")
+
+            for j, band in enumerate(band_order):
+                band_clean = band.replace(" ", "_").replace("-", "_")
+                key = f"Band_Pct_{lobe_clean}_{band_clean}"
+                band_pct_features[key] = float(pct_matrix[i, j])
+
+        # -------- PLOT + SAVE --------
+
+        from plot_lobe_band_heatmaps import plot_lobe_band_heatmaps
+
+        fig, TBR_lobes, TBR_mean = plot_lobe_band_heatmaps(
+            abs_matrix,
+            pct_matrix,
+            lobes,
+            bands
+        )
+
+        save_path = get_save_path("LBTopo", PATIENT_ID, BATCH_OUTPUT_PATH)
+        plt.savefig(save_path, dpi=150)
+        plt.savefig(os.path.join(OUTPUT_PATH, f'{PATIENT_ID}_band_topo.png'), dpi=150)
+        plt.close()
+
+        def clean_name(name):
+            return name.replace("–", "-").replace(" ", "").replace("_", "")
+
+        TBR_metrics = {
+            f"TBR_lb_{clean_name(lobe)}": value
+            for lobe, value in zip(lobes, TBR_lobes)
+        }
+
+        TBR_metrics["Global_TBR"] = TBR_mean
+        TBR_metrics["TBR_Ch_Mean"] = mean_TBR_val
+        TBR_metrics["TBR_Ch_STD"] = std_TBR_val
+
+        print("\nTheta/Beta Ratios (TBR):")
+        for k, v in TBR_metrics.items():
+            print(f"{k:25s}: {v:.3f}")
 
         # %% Section 2C: Combined PSD + Band Power Diagram
         print("\n" + "=" * 60)
@@ -431,9 +503,11 @@ def process_directory(DATA_PATH):
             f"Theta/Beta Ratio (TBR): {np.nanmean(TBR):.3f}",
             fontsize=15, fontweight='bold'
         )
-
+        save_path = get_save_path("FreqBand", PATIENT_ID, BATCH_OUTPUT_PATH)
+        plt.savefig(save_path, dpi=150)
         plt.savefig(os.path.join(OUTPUT_PATH, f'{PATIENT_ID}_band_composition.png'), dpi=150)
-        plt.show()
+        #plt.show()
+        plt.close()
 
         # %% SECTION 2D: COMBINED 3×2 TOPOGRAPHY PANEL (TOTAL + EEG BANDS)
         print("\n" + "=" * 60)
@@ -563,9 +637,101 @@ def process_directory(DATA_PATH):
 
         combined_path = os.path.join(OUTPUT_PATH, f"{PATIENT_ID}_combined_topomaps.png")
         plt.savefig(combined_path, dpi=150, bbox_inches='tight')
+        save_path = get_save_path("FreqTopo", PATIENT_ID, BATCH_OUTPUT_PATH)
+        plt.savefig(save_path, dpi=150)
+
         plt.close()
 
         print(f"Combined topomap figure saved to: {combined_path}")
+
+        # ------------------------------------------------------------
+        # 7. Normalized 3x2 Topomaps (shared 0–1 scale, Blues)
+        # ------------------------------------------------------------
+        from matplotlib import gridspec
+
+        # ---------- NORMALIZE ----------
+        topo_values_norm = []
+        for vals in topo_values:
+            vmin = np.min(vals)
+            vmax = np.max(vals)
+            topo_values_norm.append((vals - vmin) / (vmax - vmin + 1e-12))
+
+        # ---------- FIGURE ----------
+        fig = plt.figure(figsize=(13, 7))
+
+        # 3 columns for maps + 1 narrow column for colorbar
+        gs = gridspec.GridSpec(
+            2, 4,
+            width_ratios=[1, 1, 1, 0.05],
+            wspace=0.30,
+            hspace=0.40
+        )
+
+        # correct subplot placement: row-major order
+        axes = [
+            fig.add_subplot(gs[0, 0]),
+            fig.add_subplot(gs[0, 1]),
+            fig.add_subplot(gs[0, 2]),
+            fig.add_subplot(gs[1, 0]),
+            fig.add_subplot(gs[1, 1]),
+            fig.add_subplot(gs[1, 2]),
+        ]
+
+        # ---------- PLOT ----------
+        for i, ax in enumerate(axes):
+            vals = topo_values_norm[i]
+
+            im, _ = mne.viz.plot_topomap(
+                vals,
+                info_topo,
+                axes=ax,
+                show=False,
+                cmap="Blues",
+                contours=6,
+                vlim=(0, 1)
+            )
+
+            for name, xy in pos_dict.items():
+                if name in ch_names_topo:
+                    ax.text(xy[0], xy[1], name,
+                            color='black', fontsize=7,
+                            ha='center', va='center')
+
+            ax.set_title(titles[i], fontsize=12, fontweight='bold')
+
+        # ---------- SUPERTITLE (first) ----------
+        plt.suptitle(
+            f"{PATIENT_ID}: Normalized Band Power Topographies (0–1)",
+            fontsize=16,
+            fontweight="bold",
+            y=0.98
+        )
+
+        # ---------- NOW ADJUST LAYOUT (ONCE ONLY) ----------
+        plt.subplots_adjust(
+            left=0.06,
+            right=0.88,  # reserve right space
+            top=0.90,  # push grid DOWN from title
+            bottom=0.08,
+        )
+
+        # ---------- COLORBAR IN DEDICATED AXIS ----------
+        cax = fig.add_axes([0.90, 0.18, 0.02, 0.64])
+        cbar = fig.colorbar(im, cax=cax)
+        cbar.ax.tick_params(labelsize=8)
+
+        # ---------- SAVE ----------
+        combined_path = os.path.join(
+            OUTPUT_PATH,
+            f"{PATIENT_ID}_combined_topomaps_normalized.png"
+        )
+
+        plt.savefig(combined_path, dpi=150, bbox_inches='tight')
+        save_path = get_save_path("FreqTopoNorm", PATIENT_ID, BATCH_OUTPUT_PATH)
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.close()
+
+        print(f"Normalized topomap figure saved to: {combined_path}")
 
         # %% Section 3: Display Preprocessed Data
         print("\n" + "=" * 60)
@@ -604,8 +770,6 @@ def process_directory(DATA_PATH):
         print("SECTION 4: COMPUTING A MATRICES")
         print("=" * 60)
 
-        # Re-segment data to continuous (all data in one segment)
-        #eeg_data.segment(trllength='all', remove_artifact='no')
 
         # Extract continuous data
         data_continuous = eeg_data.data[0, :26, :]  # First 26 channels (EEG only, exclude EOG)
@@ -718,10 +882,12 @@ def process_directory(DATA_PATH):
 
             # --- 3) Condition ratio: sigma_max / sigma_min ---
             s_min = s_pos.min()
-            log_sigma_max = np.log(s_pos.max())
-            log_sigma_min = np.log(s_pos.min())
+            #log_sigma_max = np.log(s_pos.max())
+            log_sigma_max = s_pos.max()
+            #log_sigma_min = np.log(s_pos.min())
+            log_sigma_min = s_pos.min()
             sing_val_diff[w] = s_pos.max() - s_pos.min()
-            condratio_windows[w] = log_sigma_max - log_sigma_min
+            condratio_windows[w] = log_sigma_max / log_sigma_min
 
             # --- 4) Rank ---
             eps_machine = np.finfo(float).eps  # 2.22e-16 for float64
@@ -739,32 +905,34 @@ def process_directory(DATA_PATH):
         print("=" * 60)
 
         # Basic summary statistics (ignore NaNs from nearly singular windows)
-        H_mean = np.nanmean(entropy_windows)
-        H_std = np.nanstd(entropy_windows)
-        H_min = np.nanmin(entropy_windows)
-        H_max = np.nanmax(entropy_windows)
+        H_SVD_mean = np.nanmean(entropy_windows)
+        H_SVD_std = np.nanstd(entropy_windows)
+        H_SVD_min = np.nanmin(entropy_windows)
+        H_SVD_max = np.nanmax(entropy_windows)
 
-        svd_mean = np.nanmean(s_pos)
-        svd_std = np.nanstd(s_pos)
-        svd_min = np.nanmin(s_pos)
-        svd_max = np.nanmax(s_pos)
+        SVD_mean = np.nanmean(s_pos)
+        SVD_std = np.nanstd(s_pos)
+        SVD_min = np.nanmin(s_pos)
+        SVD_max = np.nanmax(s_pos)
 
-        k_log_mean = np.nanmean(condratio_windows)
-        k_log_std = np.nanstd(condratio_windows)
-        k_log_min = np.nanmin(condratio_windows)
-        k_log_max = np.nanmax(condratio_windows)
+        SVD_ratio_mean = np.nanmean(condratio_windows)
+        SVD_ratio_std = np.nanstd(condratio_windows)
+        SVD_ratio_min = np.nanmin(condratio_windows)
+        SVD_ratio_max = np.nanmax(condratio_windows)
 
-        total_AUC_mean = np.mean(auc_per_window)    # Mean AUC across all windows (scalar)
-        total_AUC_std = np.nanstd(auc_per_window)  # SVD AUC across all windows (scalar)
-        total_AUC_min = np.nanmin(auc_per_window) # Min AUC across all windows (scalar)
-        total_AUC_max = np.nanmax(auc_per_window) # Max AUC across all windows (scalar)
+        SVD_Sum_mean = np.mean(auc_per_window)    # Mean AUC across all windows (scalar)
+        SVD_Sum_std = np.nanstd(auc_per_window)  # SVD AUC across all windows (scalar)
+        SVD_Sum_min = np.nanmin(auc_per_window) # Min AUC across all windows (scalar)
+        SVD_Sum_max = np.nanmax(auc_per_window) # Max AUC across all windows (scalar)
 
         sing_val_diff_mean=np.nanmean(sing_val_diff)
         sing_val_diff_std = np.nanstd(sing_val_diff)
+        sing_val_diff_min = np.nanmin(sing_val_diff)
+        sing_val_diff_max = np.nanmax(sing_val_diff)
 
-        print(f"Entropy  -> mean: {H_mean:.3f}, std: {H_std:.3f}, min: {H_min:.3f}, max: {H_max:.3f}")
-        print(f"CondRatio-> mean: {k_log_mean:.3f}, std: {k_log_std:.3f}, min: {k_log_min:.3f}, max: {k_log_max:.3f}")
-        print(f"SVD AUC  -> mean: {total_AUC_mean:.3f}, std: {total_AUC_std:.3f}, min: {total_AUC_min:.3f}, max: {total_AUC_max:.3f}")
+        print(f"Entropy  -> mean: {H_SVD_mean:.3f}, std: {H_SVD_std:.3f}, min: {H_SVD_min:.3f}, max: {H_SVD_max:.3f}")
+        print(f"CondRatio-> mean: {SVD_ratio_mean:.3f}, std: {SVD_ratio_std:.3f}, min: {SVD_ratio_min:.3f}, max: {SVD_ratio_max:.3f}")
+        print(f"SVD AUC  -> mean: {SVD_Sum_mean:.3f}, std: {SVD_Sum_std:.3f}, min: {SVD_Sum_min:.3f}, max: {SVD_Sum_max:.3f}")
         print(f"SVD Diff -> mean: {sing_val_diff_mean:.3f}, std: {sing_val_diff_std:.3f}")
 
         # ---------------------------------------------------------
@@ -779,24 +947,29 @@ def process_directory(DATA_PATH):
 
         plot_path = os.path.join(plots_dir, f"{PATIENT_ID}_Ametrics_timeseries.png")
 
-        from matplotlib.ticker import ScalarFormatter
+        from matplotlib.ticker import FormatStrFormatter
 
         def set_4_yticks(ax, data):
+
+            data = np.asarray(data, dtype=float)
+            data = data[np.isfinite(data)]
+
             y_min, y_max = np.min(data), np.max(data)
             y_min_r = int(np.floor(y_min))
             y_max_r = int(np.ceil(y_max))
+
             ax.set_ylim(y_min_r, y_max_r)
+
             yticks = np.linspace(y_min_r, y_max_r, 4)
             ax.set_yticks(yticks)
-            ax.yaxis.set_major_formatter(ScalarFormatter(useMathText=False))
-            ax.ticklabel_format(style='plain', axis='y', useOffset=False)
-            ax.set_yticklabels([f"{v:.2f}" for v in ax.get_yticks()])
+
+            ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
 
         # 1x2 subplot: Entropy and Condition Ratio across windows
         plt.figure(figsize=(12, 5))
 
         # --- Top: Entropy time series ---
-        ax1 = plt.subplot(3, 1, 1)
+        ax1 = plt.subplot(2, 1, 1)
         ax1.plot(entropy_windows)
         ax1.set_title(f"Entropy per Window\n{PATIENT_ID}")
         ax1.set_xlabel("Window index")
@@ -804,17 +977,18 @@ def process_directory(DATA_PATH):
         ax1.grid(True)
         set_4_yticks(ax1, entropy_windows)
 
-        # --- Middle: Condition ratio time series ---
-        ax2 = plt.subplot(3, 1, 2)
-        ax2.plot(condratio_windows)
-        ax2.set_title(f"Condition Ratio per Window\n{PATIENT_ID}")
-        ax2.set_xlabel("Window index")
-        ax2.set_ylabel("σ_max / σ_min")
-        ax2.grid(True)
-        set_4_yticks(ax2, condratio_windows)
+        # # --- Middle: Condition ratio time series ---
+        # ax2 = plt.subplot(3, 1, 2)
+        # ax2.yaxis.converter = None
+        # ax2.plot(condratio_windows)
+        # ax2.set_title(f"Condition Ratio per Window\n{PATIENT_ID}")
+        # ax2.set_xlabel("Window index")
+        # ax2.set_ylabel("σ_max / σ_min")
+        # ax2.grid(True)
+        # set_4_yticks(ax2, condratio_windows)
 
         # --- Bottom: SVD Sum time series ---
-        ax3 = plt.subplot(3, 1, 3)
+        ax3 = plt.subplot(2, 1, 2)
         ax3.plot(auc_per_window)
         ax3.set_title("Singular Value Sum per Window")
         ax3.set_xlabel("Window Index")
@@ -825,6 +999,8 @@ def process_directory(DATA_PATH):
         plt.tight_layout()
         plt.savefig(os.path.join(OUTPUT_PATH, f'{PATIENT_ID}_A-Mat_SVD.png'),
                      dpi=300, bbox_inches='tight')
+        save_path = get_save_path("SVD", PATIENT_ID, BATCH_OUTPUT_PATH)
+        plt.savefig(save_path, dpi=150)
         plt.close()
 
         print(f"Saved per-subject A-metrics SVD Feature time-series plot to:\n  {OUTPUT_PATH}")
@@ -884,7 +1060,7 @@ def process_directory(DATA_PATH):
             # Average correlation for this window
             window_correlations[win_idx] = np.mean(corr_vals)
 
-            if (win_idx + 1) % 50 == 0: #Every 10 windows, prints progress to monitor long runs.
+            if (win_idx + 1) % 100 == 0: #Every 100 windows, prints progress to monitor long runs.
                 print(f"  Processed {win_idx + 1}/{n_windows} windows...")
 
         print(f"Full Signal reconstruction complete!")
@@ -977,7 +1153,7 @@ def process_directory(DATA_PATH):
         plt.title('Histogram of Window Correlations')
         plt.legend()
         plt.grid(True, alpha=0.3)
-        plt.show()
+        #plt.show()
 
         # Calculate reconstruction quality metrics #TODO: To be removed
         mse = np.mean((data_continuous - data_reconstructed) ** 2)
@@ -1076,7 +1252,7 @@ def process_directory(DATA_PATH):
         plt.tight_layout()
         #plt.savefig(os.path.join(OUTPUT_PATH, f'{PATIENT_ID}_reconstruction_metric_comparison.png'),
                     #dpi=150, bbox_inches='tight')
-        plt.show()
+        #plt.show()
 
         # %% Section 6: Log Normal Modelling and Feature Extraction
         print("\n" + "=" * 60)
@@ -1089,7 +1265,7 @@ def process_directory(DATA_PATH):
         # ----------------------------------
         # 1. Estimate multivariate log-normal model
         # ----------------------------------
-        mu_vec, cov_mat, log_energy_windows = extract_multivariate_lognormal_energy(
+        mu_vec, cov_mat, log_energy_windows,energy = extract_multivariate_lognormal_energy(
             eeg=data_clean,  # shape (26, n_samples)
             fs_hz=fs,
             window_ms=window_length*1000,
@@ -1114,102 +1290,430 @@ def process_directory(DATA_PATH):
             log_energy_windows = log_energy_windows
         )
 
-        # ----------------------------------
-        # X-axes
-        # ----------------------------------
-        x_energy = np.logspace(-16, -6, 600)  # for log-normal PDF
-        z_log = np.linspace(mu.min() - 4 * sigma.max(),
-                            mu.max() + 4 * sigma.max(), 600)  # for normal PDF
+        # ---------------------------
+        # Log Normal Features Plotting
+        # ---------------------------
+        EEG_labels = list(channel_labels[:26])
+        EEG_cov = cov_mat[:26, :26]
 
-        # ----------------------------------
-        # Figure layout: 3 Panels
-        # ----------------------------------
-        fig = plt.figure(figsize=(18, 6))
-        gs = fig.add_gridspec(1, 3, width_ratios=[3, 3, 2])
+        # =========================================
+        # EEG channel groups (10–20 system)
+        # =========================================
+        GROUPS = {
+            "Prefrontal": [
+                "Fp1", "Fp2"
+            ],
+            "Frontal": [
+                 "F7", "F3", "Fz", "F4", "F8"
+            ],
+            "Front-Central": [
+                "FC3", "FCz", "FC4"
+            ],
+            "Central": [
+                "T7", "C3", "Cz", "C4", "T8"
+            ],
+            "Centro-Parietal": [
+                "CP3","CPz","CP4"
+            ],
+            "Parietal": [
+                "P7", "P3", "Pz", "P4", "P8"
+            ],
+            "Occipital": [
+                "O1", "Oz", "O2"
+            ]
+        }
+        GROUP_COLORS = {
+            "Prefrontal": "tab:purple",
+            "Frontal": "tab:blue",
+            "Front-Central": "tab:cyan",
+            "Central": "tab:orange",
+            "Centro-Parietal": "tab:pink",
+            "Parietal": "tab:green",
+            "Occipital": "tab:red"
+        }
 
-        # ----------------------------------
-        # LEFT: Log Normal PDF plot
-        # ----------------------------------
+        # ---------------------------
+        # Sort channels by mu
+        # ---------------------------
+        order = np.argsort(mu[:26])
+        mu_sorted = mu[order]
+        sigma_sorted = sigma[order]
+        labels_sorted = [EEG_labels[i] for i in order]
 
-        ax_ln = fig.add_subplot(gs[0, 0])
+        # --------------------------------------------------
+        # Summary statistics for channel-wise μ and σ
+        # (Spread & dissimilarity measures) Added on Jan 10, 2026
+        # --------------------------------------------------
 
-        for ch in range(n_channels):
-            pdf_ln = lognorm.pdf(x_energy, s=sigma[ch], scale=np.exp(mu[ch]))
-            ax_ln.plot(x_energy, pdf_ln, alpha=0.6)
+        # ----- μ (log-mean energy) -----
+        mu_range = np.max(mu_sorted) - np.min(mu_sorted)
+        mu_std = np.std(mu_sorted)
+        mu_mean = np.mean(mu_sorted)
+        mu_cv = mu_std / (np.abs(mu_mean) + 1e-12)
 
-        ax_ln.set_xscale("log")
-        ax_ln.set_xlabel("Normalized Energy (log scale)")
-        ax_ln.set_ylabel("Probability Density")
-        ax_ln.set_title("Channel-wise Log-normal PDFs")
+        # ----- σ (log-variance / instability) -----
+        sigma_range = np.max(sigma_sorted) - np.min(sigma_sorted)
+        sigma_std = np.std(sigma_sorted)
+        sigma_mean = np.mean(sigma_sorted)
+        sigma_cv = sigma_std / (np.abs(sigma_mean) + 1e-12)
 
-        # ----------------------------------
-        # CENTRE: Normal PDFs (log-energy)
-        # ----------------------------------
+        # --------------------------------------------------
+        # Append channel-wise μ / σ spread metrics Added on Jan 10, 2026
+        # --------------------------------------------------
 
-        ax_n = fig.add_subplot(gs[0, 1])
+        ln_features.update({
+            # μ (log-energy mean) dissimilarity
+            "mu_range": mu_range,
+            "mu_std": mu_std,
+            "mu_cv": mu_cv,
 
-        for ch in range(n_channels):
-            pdf_n = norm.pdf(z_log, mu[ch], sigma[ch])
-            ax_n.plot(z_log, pdf_n, alpha=0.6)
+            # σ (log-energy variability) dissimilarity
+            "sigma_range": sigma_range,
+            "sigma_std": sigma_std,
+            "sigma_cv": sigma_cv
+        })
 
-        ax_n.set_xlabel("log(Energy)")
-        ax_n.set_ylabel("Probability Density")
-        ax_n.set_title("Channel-wise Gaussian PDFs (log-space)")
+        # ---------------------------
+        # Gaussian axis
+        # ---------------------------
+        z = np.linspace(mu_sorted.min() - 4 * sigma_sorted.max(),
+                        mu_sorted.max() + 4 * sigma_sorted.max(),
+                        600)
 
-        # ----------------------------------
-        # Right: μ–σ table
-        # ----------------------------------
-        ax_tbl = fig.add_subplot(gs[0, 2])
-        ax_tbl.axis("off")
+        # ======================================================
+        # BUILD MASTER FIGURE
+        # ======================================================
+        fig = plt.figure(figsize=(18, 10),constrained_layout=True)
+        gs = fig.add_gridspec(
+            2, 3,
+            width_ratios=[3, 2, 3],
+            height_ratios=[1, 1],
+            wspace=0.25,
+            hspace=0.25
+        )
 
-        table_data = [
-            [channel_labels[ch], f"{mu[ch]:.3f}", f"{sigma[ch]:.3f}"]
-            for ch in range(n_channels)
-        ]
+        from matplotlib import cm
 
-        table = ax_tbl.table(
-            cellText=table_data,
+        # Fixed, reproducible colors for 26 channels
+        cmap = cm.get_cmap("tab20", len(labels_sorted))
+        channel_color_map = {
+            ch: cmap(i) for i, ch in enumerate(labels_sorted)
+        }
+
+        # Fixed, reproducible colors for 26 channels
+        cmap = cm.get_cmap("tab20", len(labels_sorted))
+        channel_color_map = {
+            ch: cmap(i) for i, ch in enumerate(labels_sorted)
+        }
+
+        # ======================================================
+        # PANEL 1 — Gaussian PDFs (FULL HEIGHT LEFT COLUMN)
+        # spans 2 columns
+        # ======================================================
+        # ======================================================
+        # SUBGRID for COLUMN 0 (split vertically)
+        # ======================================================
+        gs_col0 = gs[:, 0].subgridspec(
+            2, 1,
+            height_ratios=[1, 1],
+            hspace=0.15
+        )
+
+        ax_pdf_energy = fig.add_subplot(gs_col0[0, 0])  # TOP
+        ax_pdf_log = fig.add_subplot(gs_col0[1, 0])  # BOTTOM
+
+        channel_handles = []
+        channel_legend = []
+
+        # --------- Plot channels - Normal Top ----------
+
+        # Collect all positive energies across channels (and/or subjects if you have them)
+        all_pos = energy[energy > 0].ravel()
+
+        xmin = np.percentile(all_pos, 1)
+        xmax = np.percentile(all_pos, 99)
+        xmin = max(xmin, eps)
+
+        # ======================================================
+        # Global normalization (single scalar, shape-preserving)
+        # ======================================================
+        #K = np.median(energy[energy > 0])
+        #K = max(K, eps)
+        K=1
+
+        energy_norm = energy / K  # same shape, no coupling
+
+        xmin_n = xmin / K
+        xmax_n = xmax / K
+
+
+        x_grid = np.geomspace(xmin, xmax, 600)
+
+        # --------- Plot channels — Normalized Energy PDFs (TOP) ----------
+
+        channel_handles = []
+        channel_legend = []
+
+        for gname, chans in GROUPS.items():
+            for ch in chans:
+                if ch not in labels_sorted:
+                    continue
+
+                i = labels_sorted.index(ch)
+
+                samples = energy_norm[i, :]
+                samples = samples[samples > 0]
+
+                if len(samples) < 10:
+                    continue
+
+                log_s = np.log(samples + eps)
+                mu_i = np.mean(log_s)
+                sigma_i = np.std(log_s, ddof=1)
+                sigma_i = max(sigma_i, 1e-6)
+
+                pdf = lognorm.pdf(x_grid, s=sigma_i, scale=np.exp(mu_i))
+
+                line, = ax_pdf_energy.plot(
+                    x_grid,
+                    pdf,
+                    lw=1,
+                    alpha=0.7,
+                    color=channel_color_map[ch]
+                )
+
+                # collect legend handles once
+                if ch not in channel_legend:
+                    channel_handles.append(line)
+                    channel_legend.append(ch)
+
+        # --------- TOP axis formatting ----------
+        ax_pdf_energy.set_title("Energy PDFs (Globally Normalized)")
+        ax_pdf_energy.set_xlabel("Energy / global median")
+        ax_pdf_energy.set_ylabel("Probability Density")
+        #ax_pdf_energy.set_xscale("log")
+        ax_pdf_energy.set_xlim(xmin_n, xmax_n)
+
+        # --------- SHARED LEGEND (TOP ONLY) ----------
+        ax_pdf_energy.legend(
+            channel_handles,
+            channel_legend,
+            fontsize=10,
+            ncol=4,
+            loc="best",
+            frameon=False,
+            title="Channels"
+        )
+
+        # --------- Plot channels - Log Normal Bottom ----------
+        for gname, chans in GROUPS.items():
+            #color = GROUP_COLORS[gname]
+            for ch in chans:
+                if ch in labels_sorted:
+                    i = labels_sorted.index(ch)
+                    ax_pdf_log.plot(
+                        z,
+                        norm.pdf(z, mu_sorted[i], sigma_sorted[i]),
+                        #color=color,
+                        lw=1,
+                        alpha=0.7
+                    )
+
+        # --------- Plot channels — Gaussian PDFs (log-energy) [BOTTOM] ----------
+
+        # Build common log-energy axis (already defined earlier)
+        # z = np.linspace(mu_sorted.min() - 4 * sigma_sorted.max(),
+        #                 mu_sorted.max() + 4 * sigma_sorted.max(), 600)
+
+        for gname, chans in GROUPS.items():
+            for ch in chans:
+                if ch not in labels_sorted:
+                    continue
+
+                i = labels_sorted.index(ch)
+
+                mu_i = mu_sorted[i]
+                sigma_i = sigma_sorted[i]
+                sigma_i = max(sigma_i, 1e-6)
+
+                ax_pdf_log.plot(
+                    z,
+                    norm.pdf(z, mu_i, sigma_i),
+                    lw=1,
+                    alpha=0.7,
+                    color=GROUP_COLORS[gname]
+                )
+
+        # --------- BOTTOM axis formatting ----------
+        ax_pdf_log.set_title("Channel-wise Gaussian PDFs (log-energy)")
+        ax_pdf_log.set_xlabel("log(Energy)")
+        ax_pdf_log.set_ylabel("Probability Density")
+        ax_pdf_log.set_xlim(z.min(), z.max())
+
+        # ======================================================
+        # PANEL 2 — Channel μ–σ table (TOP MIDDLE)
+        # ======================================================
+        gs_mid = gs[:, 1].subgridspec(
+            2, 1,
+            height_ratios=[3, 1],  # 75% / 25%
+            hspace=0.00
+        )
+
+        ax_tbl1 = fig.add_subplot(gs_mid[0, 0])   # top table
+        ax_tbl1.set_title("Channel-wise Gaussian Parameters", pad=0, loc="center")
+        ax_tbl1.axis("off")
+
+        tbl1 = ax_tbl1.table(
+            cellText=[
+                [labels_sorted[i],
+                 f"{mu_sorted[i]:.3f}",
+                 f"{sigma_sorted[i]:.3f}"]
+                for i in range(len(mu_sorted))
+            ],
             colLabels=["Channel", "μ (log)", "σ (log)"],
-            loc="center",
+            loc="best",
             cellLoc="center"
         )
 
-        table.auto_set_font_size(False)
-        table.set_fontsize(8)
-        table.scale(1.0, 1.3)
+        tbl1.auto_set_font_size(False)
+        tbl1.set_fontsize(12)
+        tbl1.scale(1.0, 1.0)
 
-        # ----------------------------------
-        # Final layout
-        # ----------------------------------
-        plt.tight_layout()
-        plt.savefig(
-            os.path.join(OUTPUT_PATH, f"{PATIENT_ID}_LogNormal_vs_Normal_PDFs.png"),
-            dpi=150,
-            bbox_inches="tight"
+        # ======================================================
+        # PANEL 3 — EEG covariance matrix (TOP RIGHT)
+        # ======================================================
+        gs_right = gs[:, 2].subgridspec(
+            2, 1,
+            height_ratios=[3, 2],  # 60% / 40%
+            hspace=0.25
         )
-        plt.show()
-        print("Log-normal parameters extracted and PDF plotted!")
 
-        # Channel indices
-        idx = np.arange(n_channels)
+        ax_cov1 = fig.add_subplot(gs_right[0, 0])
+
+        im = ax_cov1.imshow(EEG_cov, cmap="jet", aspect="auto",vmin=0,vmax=1)
+        plt.colorbar(im, ax=ax_cov1, fraction=0.046, pad=0.04)
+
+        ax_cov1.set_title("EEG Covariance Matrix (26×26)")
+
+        # keep labels, remove tick values
+        ax_cov1.set_xticks(np.arange(len(EEG_labels)))
+        ax_cov1.set_xticklabels(EEG_labels, rotation=90, fontsize=8)
+        ax_cov1.set_yticks(np.arange(len(EEG_labels)))
+        ax_cov1.set_yticklabels(EEG_labels, fontsize=8)
 
 
-        # Plot covariance matrix
-        plt.figure(figsize=(6, 5))
-        im = plt.imshow(cov_mat, cmap="viridis", aspect="auto")
-        plt.colorbar(im, fraction=0.046, pad=0.04)
-        plt.title("Log-normal Energy Covariance Matrix (26×26)")
-        plt.xlabel("Channel index")
-        plt.ylabel("Channel index")
-        plt.xticks(idx, channel_labels[:26], rotation=90, fontsize=8)
-        plt.yticks(idx, channel_labels[:26], fontsize=8)
-        plt.tick_params(axis="both", which="major", length=4)
-        plt.tight_layout()
-        plt.show()
-        plt.savefig(os.path.join(OUTPUT_PATH, f'{PATIENT_ID}_Log-Normal_En_CoVar_Mat.png'),
-                     dpi=150, bbox_inches='tight')
-        print("Log-normal modeling complete!")
+        ax_cov1.tick_params(axis="both", length=0, labelbottom=True)
 
+        # =========================================
+        # BUILD GROUP SUMMARY (μ mean & σ mean)
+        # =========================================
+        group_names = list(GROUPS.keys())
+
+        group_summary = []
+
+        for gname in group_names:
+            # channel indices that belong to this group
+            idx = [labels_sorted.index(ch)
+                   for ch in GROUPS[gname]
+                   if ch in labels_sorted]
+
+            # compute group means
+            mu_mean = np.mean(mu_sorted[idx])
+            sigma_mean = np.mean(sigma_sorted[idx])
+
+            group_summary.append([
+                gname,
+                f"{mu_mean:.3f}",
+                f"{sigma_mean:.3f}"
+            ])
+
+        # ======================================================
+        # PANEL 4 — Group μ–σ table (BOTTOM MIDDLE)
+        # ======================================================
+        ax_tbl2 = fig.add_subplot(gs_mid[1, 0])   # bottom table
+        ax_tbl2.set_title("Group-wise Mean Gaussian Parameters", pad=0, loc="center")
+        ax_tbl2.axis("off")
+
+        tbl2 = ax_tbl2.table(
+            cellText=group_summary,
+            colLabels=["Group", "μ mean", "σ mean"],
+            loc="best",
+            cellLoc="center"
+        )
+
+        tbl2.auto_set_font_size(False)
+        tbl2.set_fontsize(12)
+        tbl2.scale(1.0, 1.0)
+
+        # =========================================
+        # BUILD GROUP-WISE COVARIANCE MATRIX (5×5)
+        # =========================================
+        G = len(group_names)
+        group_cov = np.zeros((G, G))
+
+        for i, g1 in enumerate(group_names):
+            idx1 = [EEG_labels.index(ch)
+                    for ch in GROUPS[g1]
+                    if ch in EEG_labels]
+
+            for j, g2 in enumerate(group_names):
+                idx2 = [EEG_labels.index(ch)
+                        for ch in GROUPS[g2]
+                        if ch in EEG_labels]
+
+                # mean absolute covariance between groups
+                group_cov[i, j] = np.mean(np.abs(EEG_cov[np.ix_(idx1, idx2)]))
+
+        # ======================================================
+        # PANEL 5 — Group-wise covariance (5×5)
+        # ======================================================
+        ax_cov2 = fig.add_subplot(gs_right[1, 0])
+
+        pos = ax_cov2.get_position()
+        ax_cov2.set_position([
+            pos.x0 + 0.10,  # move right
+            pos.y0,  # keep same vertical
+            pos.width * 0.8,  # shrink width
+            pos.height * 0.8  # keep height
+        ])
+
+        im2 = ax_cov2.imshow(group_cov, cmap="magma", aspect="auto",vmin=0,vmax=0.8)
+        plt.colorbar(im2, ax=ax_cov2, fraction=0.046, pad=0.04)
+
+        ax_cov2.set_title("Group-wise Covariance (5×5)")
+
+        ax_cov2.set_xticks(range(len(group_names)))
+        ax_cov2.set_xticklabels(group_names, rotation=45)
+        ax_cov2.set_yticks(range(len(group_names)))
+        ax_cov2.set_yticklabels(group_names)
+
+        ax_cov2.tick_params(length=0)
+
+        # =======================================================
+        # FINAL LAYOUT + SAVE
+        # =======================================================
+        fig.subplots_adjust(
+            left=0.01, right=0.99,
+            bottom=0.01, top=0.99
+        )
+        #plt.tight_layout(rect=[0.04, 0.04, 0.96, 0.96])
+
+
+        plt.savefig(
+            os.path.join(OUTPUT_PATH, f"{PATIENT_ID}_Gaussian_Table_Covariance.png"),
+            dpi=300,
+            bbox_inches="tight",
+            pad_inches=0.1
+        )
+
+        save_path = get_save_path("LN", PATIENT_ID, BATCH_OUTPUT_PATH)
+        plt.savefig(
+            save_path,
+            dpi=300,
+            bbox_inches="tight",
+            pad_inches=0.1)
+
+        print("Gaussian modeling plots saved successfully!")
         # %% Section 7A: Visualize Original vs Reconstructed Signal
         print("\n" + "=" * 60)
         print("SECTION 7A: VISUALIZING RECONSTRUCTION")
@@ -1284,7 +1788,7 @@ def process_directory(DATA_PATH):
         plt.tight_layout()
         plt.savefig(os.path.join(OUTPUT_PATH, f'{PATIENT_ID}_reconstruction_comparison.png'),
                     dpi=150, bbox_inches='tight')
-        plt.show()
+        #plt.show()
 
         print(f"Reconstruction plot saved to: {OUTPUT_PATH}")
         print(f"\nPer-channel correlations:")
@@ -1368,7 +1872,7 @@ def process_directory(DATA_PATH):
         plt.tight_layout()
         plt.savefig(os.path.join(OUTPUT_PATH, f'{PATIENT_ID}_good_reconstruction_comparison.png'),
                     dpi=150, bbox_inches='tight')
-        plt.show()
+        #plt.show()
 
         print("Good-only reconstruction plot saved.")
 
@@ -1380,7 +1884,7 @@ def process_directory(DATA_PATH):
         print("="*60)
 
         # Import the identifySS function from utils
-        from preprocessing.utils import identifySS
+        from SS_analysis import compute_sink_source_scores
 
         # Compute sink and source indices for each window
         n_windows = A_matrices.shape[2]
@@ -1392,7 +1896,7 @@ def process_directory(DATA_PATH):
         print("Computing sink and source indices for each window...")
 
         for i in range(n_windows):
-            sink_idx, source_idx, row_rank, col_rank = identifySS(A_matrices[:, :, i]) #TODO: Normalize so 0 --> 1
+            sink_idx, source_idx, row_rank, col_rank = compute_sink_source_scores(A_matrices[:, :, i]) #TODO: Normalize so 0 --> 1
             sink_indices[:, i] = sink_idx
             source_indices[:, i] = source_idx
             row_ranks[:, i] = row_rank
@@ -1426,11 +1930,223 @@ def process_directory(DATA_PATH):
 
         # Loop through only the GOOD windows
         for i in range(n_windows_good):
-            sink_idx, source_idx, row_rank, col_rank = identifySS(A_good[:, :, i])
+            sink_idx, source_idx, row_rank, col_rank = compute_sink_source_scores(A_good[:, :, i])
             sink_indices_good[:, i] = sink_idx
             source_indices_good[:, i] = source_idx
             row_ranks_good[:, i] = row_rank
             col_ranks_good[:, i] = col_rank
+
+        #Plotting Source Sink Map
+
+        from matplotlib.lines import Line2D
+
+        # --------------------------------------------------
+        # 1. Mean ranks across windows
+        # --------------------------------------------------
+        row_rank_mean = np.mean(row_ranks_good, axis=1)
+        col_rank_mean = np.mean(col_ranks_good, axis=1)
+
+        labels = eeg_data.labels[:26]
+        nCh = len(labels)
+
+        # --------------------------------------------------
+        # 2. Lobe definitions (edit if needed)
+        # --------------------------------------------------
+        lobe_map = {
+            "Fp1": "Prefrontal", "Fp2": "Prefrontal",
+            "F3": "Frontal", "F4": "Frontal", "F7": "Frontal", "F8": "Frontal", "Fz": "Frontal",
+            "FC3": "FrontoCentral", "FC4": "FrontoCentral", "FCz": "FrontoCentral",
+
+            "C3": "Central", "C4": "Central", "Cz": "Central",
+
+            "CP3": "CentroParietal", "CP4": "CentroParietal", "CPz": "CentroParietal",
+            "P3": "Parietal", "P4": "Parietal", "P7": "Parietal", "P8": "Parietal", "Pz": "Parietal",
+
+            "O1": "Occipital", "O2": "Occipital", "Oz": "Occipital",
+
+            "T7": "Temporal", "T8": "Temporal"
+        }
+
+        lobe_colors = {
+            "Prefrontal": "#ffbb78",  # light orange
+            "Frontal": "#1f77b4",  # blue
+            "FrontoCentral": "#17becf",  # cyan
+            "Central": "#2ca02c",  # green
+            "CentroParietal": "#8c564b",  # brown
+            "Parietal": "#ff7f0e",  # orange
+            "Temporal": "#d62728",  # red
+            "Occipital": "#9467bd",  # purple
+            "Other": "gray"
+        }
+
+        # --------------------------------------------------
+        # 3. Figure
+        # --------------------------------------------------
+        plt.figure(figsize=(9, 8))
+
+        # --------------------------------------------------
+        # 4. Cluster center & radial layout
+        # --------------------------------------------------
+        cx = np.mean(row_rank_mean)
+        cy = np.mean(col_rank_mean)
+
+        radius = 0.32
+        angles = np.linspace(0, 2 * np.pi, nCh, endpoint=False)
+
+        # --------------------------------------------------
+        # 5. Plot channels
+        # --------------------------------------------------
+        for i in range(nCh):
+            ch = labels[i]
+            lobe = lobe_map.get(ch, "Other")
+            color = lobe_colors[lobe]
+
+            # Data point
+            plt.scatter(row_rank_mean[i], col_rank_mean[i],
+                        edgecolors=color,
+                        facecolors='none',
+                        s=120,
+                        linewidths=1.8,
+                        zorder=3)
+
+            # Radial label position
+            lx = cx + radius * np.cos(angles[i])
+            ly = cy + radius * np.sin(angles[i])
+
+            # Leader line
+            plt.plot([row_rank_mean[i], lx],
+                     [col_rank_mean[i], ly],
+                     color=color,
+                     lw=0.6,
+                     alpha=0.7,
+                     zorder=2)
+
+            # Label
+            plt.text(lx, ly, ch,
+                     fontsize=9,
+                     color=color,
+                     ha='center',
+                     va='center',
+                     zorder=4)
+
+        # --------------------------------------------------
+        # 6. Perfect source / sink
+        # --------------------------------------------------
+        root2 = np.sqrt(2)
+        plt.scatter(root2, 0, c='black', s=200, marker='X', zorder=5, label='Perfect Sink (√2, 0)')
+        plt.scatter(0, root2, c='black', s=200, marker='P', zorder=5, label='Perfect Source (0, √2)')
+
+        # --------------------------------------------------
+        # 7. Axes & grid
+        # --------------------------------------------------
+        plt.xlim(-0.1, 1.6)
+        plt.ylim(-0.1, 1.6)
+
+        plt.axvline(0.5, color='gray', ls='--', alpha=0.4)
+        plt.axhline(0.5, color='gray', ls='--', alpha=0.4)
+
+        plt.xlabel("Row Rank (Receiving ↑)", fontsize=12)
+        plt.ylabel("Column Rank (Sending ↑)", fontsize=12)
+        plt.title("Channel-wise Source–Sink Map", fontsize=14)
+
+        plt.grid(alpha=0.3)
+
+        # --------------------------------------------------
+        # 8. Legends
+        # --------------------------------------------------
+        lobe_legend = [
+            Line2D([0], [0], color=c, lw=2, label=l)
+            for l, c in lobe_colors.items() if l != "Other"
+        ]
+
+        plt.legend(handles=lobe_legend,
+                   title="Lobes",
+                   loc="best",
+                   frameon=True)
+
+        # --------------------------------------------------
+        # Ideal Source / Sink reference points
+        # --------------------------------------------------
+        root2 = np.sqrt(2)
+
+        # Ideal Sink
+        plt.scatter(root2, 0,
+                    marker='X',
+                    s=260,
+                    c='black',
+                    linewidths=2.5,
+                    zorder=10)
+
+        plt.text(root2 + 0.03, 0,
+                 "Ideal Sink",
+                 fontsize=10,
+                 fontweight='bold',
+                 va='center',
+                 ha='left')
+
+        # Ideal Source
+        plt.scatter(0, root2,
+                    marker='+',
+                    s=320,
+                    c='black',
+                    linewidths=2.5,
+                    zorder=10)
+
+        plt.text(0, root2 + 0.03,
+                 "Ideal Source",
+                 fontsize=10,
+                 fontweight='bold',
+                 va='bottom',
+                 ha='center')
+
+        plt.tight_layout()
+
+        # --------------------------------------------------
+        # 9. Save to both paths
+        # --------------------------------------------------
+        plt.savefig(combined_path, dpi=200, bbox_inches='tight')
+
+        save_path = get_save_path("SS_Map", PATIENT_ID, BATCH_OUTPUT_PATH)
+        plt.savefig(save_path, dpi=200, bbox_inches='tight')
+
+        plt.close()
+
+        from ss_map_features import (
+            ss_map_ch_features,
+            ss_map_lb_features,
+            ss_map_nw_features
+        )
+
+        # already computed
+        row_rank_mean = np.mean(row_ranks_good, axis=1)
+        col_rank_mean = np.mean(col_ranks_good, axis=1)
+        labels = eeg_data.labels[:26]
+
+        # channel-level
+        ch_feats = ss_map_ch_features(row_rank_mean, col_rank_mean)
+
+        # lobe-level
+        lb_feats = ss_map_lb_features(
+            row_rank_mean,
+            col_rank_mean,
+            labels,
+            lobe_map
+        )
+
+        # network-level
+        nw_feats = ss_map_nw_features(row_rank_mean, col_rank_mean)
+
+        # --------------------------------------------------
+        # Final container (directly appendable)
+        # --------------------------------------------------
+        ss_map = {
+            "channel": ch_feats,
+            "lobe": lb_feats,
+            "network": nw_feats
+        }
+
+        # example
+
 
         print("Good-window Sink/Source indices computed!")
         print(f"Shape: {sink_indices_good.shape}")
@@ -1480,8 +2196,8 @@ def process_directory(DATA_PATH):
         ax.set_ylabel("Channel")
 
         plt.tight_layout()
-        plt.savefig(os.path.join(OUTPUT_PATH, f'{PATIENT_ID}_sink_heatmap.png'), dpi=150)
-        plt.show()
+        #plt.savefig(os.path.join(OUTPUT_PATH, f'{PATIENT_ID}_sink_heatmap.png'), dpi=150)
+        #plt.show()
 
         print(f"Heatmap saved to: {OUTPUT_PATH}")
 
@@ -1523,7 +2239,9 @@ def process_directory(DATA_PATH):
 
         plt.tight_layout()
         plt.savefig(os.path.join(OUTPUT_PATH, f'{PATIENT_ID}_sink_heatmap_good_only.png'), dpi=150)
-        plt.show()
+        save_path = get_save_path("SI_HM", PATIENT_ID, BATCH_OUTPUT_PATH)
+        plt.savefig(save_path, dpi=150)
+        #plt.show()
 
         print(f"Good-window heatmap saved to: {OUTPUT_PATH}")
 
@@ -1561,54 +2279,6 @@ def process_directory(DATA_PATH):
         montage = mne.channels.make_standard_montage('standard_1020')
         info.set_montage(montage)
 
-        # Create figure for topomap
-        fig, ax = plt.subplots(figsize=(10, 8))
-
-        # Plot topomap with mean sink indices
-        im, _ = mne.viz.plot_topomap(
-            mean_sink_index,
-            info,
-            axes=ax,
-            show=False,
-            cmap='RdBu_r',
-            #vlim=(mean_sink_index.min(), mean_sink_index.max()),
-            vlim=(0,1.4),
-            contours=6,
-            names=ch_names,
-            # show_names=True
-        )
-
-        # Add colorbar
-        cbar_ax = fig.add_axes([0.92, 0.2, 0.02, 0.6])
-        cbar = fig.colorbar(im, cax=cbar_ax)
-        cbar.set_label('Mean Sink Index', rotation=270, labelpad=20, fontsize=12)
-
-        # Set title
-        ax.set_title(
-            f'Mean Sink Index Topographic Map - {PATIENT_ID}\n'
-            f'Averaged over {n_windows} windows ({n_windows * window_length:.1f}s total)',
-            fontsize=14,
-            fontweight='bold',
-            pad=20
-        )
-
-        plt.subplots_adjust(left=0.05, right=0.88, top=0.92, bottom=0.08)
-        plt.savefig(os.path.join(OUTPUT_PATH, f'{PATIENT_ID}_sink_topomap.png'), dpi=150, bbox_inches='tight')
-        plt.show()
-
-        print(f"Topomap saved to: {OUTPUT_PATH}")
-        print(f"\nTop 5 Sink Channels (by mean sink index):")
-        top_sink_idx = np.argsort(mean_sink_index)[::-1][:5]
-        for i, ch_idx in enumerate(top_sink_idx):
-            print(f"  {i+1}. {ch_names[ch_idx]}: {mean_sink_index[ch_idx]:.4f}")
-        print(f"\n✅ Completed {file_idx}/{len(csv_files)} "
-              f"({(file_idx / len(csv_files)) * 100:.1f}%) files. "
-              f"Results saved in: {OUTPUT_PATH}\n")
-
-        # %% Section 10B: Visualize Sink Index Topomap (GOOD Windows Only)
-        print("\n" + "=" * 60)
-        print("SECTION 10B: VISUALIZING GOOD-WINDOW SINK INDEX TOPO MAP")
-        print("=" * 60)
 
         # Mean sink index for GOOD windows only
         mean_sink_index_good = np.mean(sink_indices_good, axis=1)
@@ -1628,7 +2298,7 @@ def process_directory(DATA_PATH):
             axes=ax,
             show=False,
             cmap='RdBu_r',
-            vlim=(0, 1.4),  # Use SAME limits so heatmaps are comparable
+            vlim=(0, np.sqrt(2)),  # Use SAME limits so heatmaps are comparable
             contours=6,
             names=ch_names
         )
@@ -1652,7 +2322,9 @@ def process_directory(DATA_PATH):
 
         plt.savefig(os.path.join(OUTPUT_PATH, f'{PATIENT_ID}_sink_topomap_good_only.png'),
                     dpi=150, bbox_inches='tight')
-        plt.show()
+        save_path = get_save_path("SI_TM", PATIENT_ID, BATCH_OUTPUT_PATH)
+        plt.savefig(save_path, dpi=150)
+        #plt.show()
 
         print(f"Good-only topomap saved to: {OUTPUT_PATH}")
 
@@ -1661,38 +2333,43 @@ def process_directory(DATA_PATH):
         for i, ch_idx in enumerate(top_sink_good_idx):
             print(f"  {i + 1}. {ch_names[ch_idx]}: {mean_sink_index_good[ch_idx]:.4f}")
 
+        print(f"\n✅ Completed {file_idx}/{len(csv_files)} "
+              f"({(file_idx / len(csv_files)) * 100:.1f}%) files. "
+              f"Results saved in: {OUTPUT_PATH}\n")
         # ================================
         # REGION DEFINITIONS (FT vs CPO)
         # ================================
 
-        left_all = [ch for ch in ch_names if ch.endswith("1") ]
-        right_all = [ch for ch in ch_names if ch.endswith("2")]
+        left_all = [ch for ch in ch_names if ch[-1] in "13579"]
+        right_all = [ch for ch in ch_names if ch[-1] in "2468"]
+        mid_all = [ch for ch in ch_names if ch[-1] == "z" or ch[-1] == "Z"]
 
         frontotemporal_labels = [
             "Fp1", "Fp2",
             "F7", "F3", "Fz", "F4", "F8",
+            "FC3", "FCz","FC4",
              "T7", "T8"
         ]
 
         left_FT = [
             "Fp1",
             "F7", "F3",
-            "FC3"
+            "FC3",
             "T7"
         ]
 
         right_FT = [
             "Fp2",
             "F8", "F4",
-            "FC4"
+            "FC4",
             "T8"
         ]
 
         centro_parieto_occipital_labels = [
             "C3", "Cz", "C4",
-            "CP3", "CPZ", "CP4",
+            "CP3", "CPz", "CP4",
             "P7", "P3", "Pz", "P4", "P8",
-            "O1", "OZ","O2"
+            "O1", "Oz","O2"
         ]
 
         left_CPO = [
@@ -1791,20 +2468,13 @@ def process_directory(DATA_PATH):
         # ----------------------------------------------
         from preprocessing.utils.entropy_utils import hist_entropy
 
-        # All-window entropies
-        H_total = hist_entropy(mean_sink_index)
-        H_FT = hist_entropy(sink_FT)
-        H_CPO = hist_entropy(sink_CPO)
-        H_ratio = H_FT / H_CPO if H_CPO > 0 else np.nan
-        Entropy_Gradient_All = H_FT - H_CPO
-
 
         # GOOD-window entropies
-        H_total_good = hist_entropy(mean_sink_index_good)
-        H_FT_good = hist_entropy(sink_FT_good)
-        H_CPO_good = hist_entropy(sink_CPO_good)
-        H_ratio_good = H_FT_good / H_CPO_good if H_CPO_good > 0 else np.nan
-        Entropy_Gradient_Good = H_FT_good - H_CPO_good
+        H_SI_total_good = hist_entropy(mean_sink_index_good)
+        H_SI_FT_good = hist_entropy(sink_FT_good)
+        H_SI_CPO_good = hist_entropy(sink_CPO_good)
+        H_SI_ratio_good = H_SI_FT_good / H_SI_CPO_good if H_SI_CPO_good > 0 else np.nan
+        H_SI_Gradient_Good = H_SI_FT_good - H_SI_CPO_good
 
 
         # ============================================
@@ -1829,14 +2499,14 @@ def process_directory(DATA_PATH):
         # ==================================================
         # 1) Mean Sink Index (ALL windows)
         # ==================================================
-        mean_sink_all = np.mean(sink_indices, axis=1)
+        #mean_sink_all = np.mean(sink_indices, axis=1)
 
         # top–5 sinks (all windows)
-        sink_idx_all, sink_label_all, sink_val_all = safe_topk(mean_sink_all, ch_names, k=5)
+        #sink_idx_all, sink_label_all, sink_val_all = safe_topk(mean_sink_all, ch_names, k=5)
 
         # top–5 sources (all windows)
-        mean_source_all = np.mean(source_indices, axis=1)
-        source_idx_all, source_label_all, source_val_all = safe_topk(mean_source_all, ch_names, k=5)
+        #mean_source_all = np.mean(source_indices, axis=1)
+        #source_idx_all, source_label_all, source_val_all = safe_topk(mean_source_all, ch_names, k=5)
 
         # ==================================================
         # 2) Mean Sink Index (GOOD windows only)
@@ -1853,11 +2523,11 @@ def process_directory(DATA_PATH):
         # ==================================================
         # 3) Regional Metrics (FT & CPO) — ALL windows
         # ==================================================
-        FT_Sink_All = roi_mean(mean_sink_all, ch_names, frontotemporal_labels)
-        FT_Source_All = roi_mean(mean_source_all, ch_names, frontotemporal_labels)
+        #FT_Sink_All = roi_mean(mean_sink_all, ch_names, frontotemporal_labels)
+        #FT_Source_All = roi_mean(mean_source_all, ch_names, frontotemporal_labels)
 
-        CPO_Sink_All = roi_mean(mean_sink_all, ch_names, centro_parieto_occipital_labels)
-        CPO_Source_All = roi_mean(mean_source_all, ch_names, centro_parieto_occipital_labels)
+        #CPO_Sink_All = roi_mean(mean_sink_all, ch_names, centro_parieto_occipital_labels)
+        #CPO_Source_All = roi_mean(mean_source_all, ch_names, centro_parieto_occipital_labels)
 
         # ==================================================
         # 5) Regional Metrics (FT & CPO) — GOOD windows
@@ -1872,11 +2542,11 @@ def process_directory(DATA_PATH):
         # FRONTO_PARIETAL GRADIENT (FT ↔ CPO) (Top vs Bottom)
         # ----------------------------------------------
 
-        Sink_Gradient_All = FT_Sink_All - CPO_Sink_All
+        #Sink_Gradient_All = FT_Sink_All - CPO_Sink_All
         Sink_Gradient_Good = FT_Sink_Good - CPO_Sink_Good
 
         #Source_Gradient_All = FT_Source_All - CPO_Source_All
-        #Source_Gradient_Good = FT_Source_Good - CPO_Source_Good
+        Source_Gradient_Good = FT_Source_Good - CPO_Source_Good
 
         # ==================================================
         # 4) Build result dictionary for this subject
@@ -1891,10 +2561,10 @@ def process_directory(DATA_PATH):
         # --- 1) Temporal Variability (STD & CV) across windows ---
 
         # Sink variability (ALL windows)
-        sink_std_all = float(np.nanmean(np.std(sink_indices, axis=1)))
-        sink_cv_all = float(np.nanmean(
-            np.std(sink_indices, axis=1) / (np.nanmean(sink_indices, axis=1) + 1e-6)
-        ))
+        #sink_std_all = float(np.nanmean(np.std(sink_indices, axis=1)))
+        #sink_cv_all = float(np.nanmean(
+        #    np.std(sink_indices, axis=1) / (np.nanmean(sink_indices, axis=1) + 1e-6)
+        #))
 
         # Sink variability (GOOD windows)
         sink_std_good = float(np.nanmean(np.std(sink_indices_good, axis=1)))
@@ -1906,7 +2576,7 @@ def process_directory(DATA_PATH):
 
         from scipy.stats import entropy
 
-        global_sink_entropy_all = float(entropy(mean_sink_all + 1e-6))
+        #global_sink_entropy_all = float(entropy(mean_sink_all + 1e-6))
         global_sink_entropy_good = float(entropy(mean_sink_good + 1e-6))
 
         # --- 3) Standard 10-20 2D coordinates (normalized) ---
@@ -1927,8 +2597,8 @@ def process_directory(DATA_PATH):
         cz = np.array([0, 0])
 
         # Sink COM (ALL)
-        sink_centroid_all = np.average(ch_pos, axis=0, weights=mean_sink_all + 1e-6)
-        sink_com_dist_all = float(np.linalg.norm(sink_centroid_all - cz))
+        #sink_centroid_all = np.average(ch_pos, axis=0, weights=mean_sink_all + 1e-6)
+        #sink_com_dist_all = float(np.linalg.norm(sink_centroid_all - cz))
 
         # Sink COM (GOOD)
         sink_centroid_good = np.average(ch_pos, axis=0, weights=mean_sink_good + 1e-6)
@@ -1937,8 +2607,8 @@ def process_directory(DATA_PATH):
         # --- 4) Switching Rate ---
 
         # ALL windows
-        top_sink_each_window_all = np.argmax(sink_indices, axis=0)
-        switch_rate_all = float(np.mean(np.diff(top_sink_each_window_all) != 0))
+        #top_sink_each_window_all = np.argmax(sink_indices, axis=0)
+        #switch_rate_all = float(np.mean(np.diff(top_sink_each_window_all) != 0))
 
         # GOOD windows
         top_sink_each_window_good = np.argmax(sink_indices_good, axis=0)
@@ -1947,10 +2617,10 @@ def process_directory(DATA_PATH):
         # --- 5) FT–CPO temporal ratio jitter ---
 
         # ALL windows
-        ft_vals_all = np.mean(sink_indices[FT_idx, :], axis=0)
-        cpo_vals_all = np.mean(sink_indices[CPO_idx, :], axis=0)
-        ft_cpo_ratio_win_all = ft_vals_all / (cpo_vals_all + 1e-6)
-        ft_cpo_jitter_all = float(np.std(ft_cpo_ratio_win_all))
+        #ft_vals_all = np.mean(sink_indices[FT_idx, :], axis=0)
+        #cpo_vals_all = np.mean(sink_indices[CPO_idx, :], axis=0)
+        #ft_cpo_ratio_win_all = ft_vals_all / (cpo_vals_all + 1e-6)
+        #ft_cpo_jitter_all = float(np.std(ft_cpo_ratio_win_all))
 
         # GOOD windows
         ft_vals_good = np.mean(sink_indices_good[FT_idx, :], axis=0)
@@ -1963,7 +2633,6 @@ def process_directory(DATA_PATH):
             "Original Duration": orig_duration,
             "Clean Duration": clean_duration,
             "Effective Duration": effective_duration,  # you already compute this earlier
-            "TBR": mean_TBR_val,
 
             # ===== Band Power % =====
             # "delta": rel_band.get("delta"),
@@ -1973,21 +2642,21 @@ def process_directory(DATA_PATH):
             # "gamma": rel_band.get("gamma"),
 
             # ===== Regional Sink/Source Metrics =====
-            "FT/CPO Sink (All)": safe_div(FT_Sink_All, CPO_Sink_All),
+            # "FT Sink (All)": FT_Sink_All,
+            # "CPO Sink (All)": CPO_Sink_All,
+
+            "FT_Sink_Good": FT_Sink_Good,
+            "CPO_Sink_Good": CPO_Sink_Good,
+
+            #"FT/CPO Sink_All)": safe_div(FT_Sink_All, CPO_Sink_All),
             #"FT/CPO Source (All)": safe_div(FT_Source_All, CPO_Source_All),
 
-            "FT/CPO Sink (Good)": safe_div(FT_Sink_Good, CPO_Sink_Good),
+            "FT_CPO_Sink_Good": safe_div(FT_Sink_Good, CPO_Sink_Good),
             #"FT/CPO Source (Good)": safe_div(FT_Source_Good, CPO_Source_Good),
 
-            "FT Sink (All)": FT_Sink_All,
-            "CPO Sink (All)": CPO_Sink_All,
-
-            "FT Sink (Good)": FT_Sink_Good,
-            "CPO Sink (Good)": CPO_Sink_Good,
-
             # ===== Good SS Analysis % =====
-            #"Mean Sink Index (Good)": float(np.nanmean(mean_sink_good)),
-            #"Mean Source Index (Good)": float(np.nanmean(mean_source_good)),
+            "Mean_Sink_Index_Good": float(np.nanmean(mean_sink_good)),
+            "Mean_Source_Index_Good": float(np.nanmean(mean_source_good)),
             # "Top Sink Ch 1_to_5 (Good)": ", ".join(sink_label_good[:5]) if sink_label_good else None,
             # "Top Source Ch 1_to_5 (Good)": ", ".join(source_label_good[:5]) if source_label_good else None,
 
@@ -1998,82 +2667,120 @@ def process_directory(DATA_PATH):
             # "Top Source Ch 1_to_5 (All)": ", ".join(source_label_all[:5]) if source_label_all else None,
 
             # ===== Spatial Entropy Metrics (Good) =====
-            "SI value Entropy (Good)": H_total_good,
-            "SI value Entropy (FT Good)": H_FT_good,
-            "SI value Entropy (CPO Good)": H_CPO_good,
-            "SI value Entropy Ratio (FT/CPO Good)": H_ratio_good,
-            "Entropy Gradient (Good)": Entropy_Gradient_Good,
+            "H_SI_total_good": H_SI_total_good,
+            "H_SI_FT_good": H_SI_FT_good,
+            "H_SI_CPO_good": H_SI_CPO_good,
+            "H_SI_ratio_good": H_SI_ratio_good,
+            "H_SI_Gradient_Good": H_SI_Gradient_Good,
 
             # ===== Spatial Entropy Metrics (All) =====
-            "SI value Entropy (All)": H_total,
-            "SI value Entropy (FT All)": H_FT,
-            "SI value Entropy (CPO All)": H_CPO,
-            "SI value Entropy Ratio (FT/CPO All)": H_ratio,
-            "Entropy Gradient (All)": Entropy_Gradient_All,
+            #"SI value Entropy (All)": H_total,
+            #"SI value Entropy (FT All)": H_FT,
+            #"SI value Entropy (CPO All)": H_CPO,
+            #"SI value Entropy Ratio (FT/CPO All)": H_ratio,
+            #"Entropy Gradient (All)": Entropy_Gradient_All,
 
             # ===== Asymmetry Index (All) =====
-            "AI_FT_All": AI_FT_all,
-            "AI_CPO_All": AI_CPO_all,
+            #"AI_FT_All": AI_FT_all,
+            #"AI_CPO_All": AI_CPO_all,
             #"AI_All_All": AI_all_all,
 
             # ===== Asymmetry Index (GOOD) =====
             "AI_FT_Good": AI_FT_good,
             "AI_CPO_Good": AI_CPO_good,
-            #"AI_All_Good": AI_all_good,
+            "AI_All_Good": AI_all_good,
 
             # ===== Gradient (GOOD) =====
-            "Sink Gradient (All)":  Sink_Gradient_All,
+           # "Sink Gradient (All)":  Sink_Gradient_All,
             "Sink Gradient (Good)": Sink_Gradient_Good,
             #"Source Gradient (All)":  Source_Gradient_All,
-            #"Source Gradient (Good)": Source_Gradient_Good,
+            "Source Gradient (Good)": Source_Gradient_Good,
 
             # ==== Heterogeneity Features ====
-            "SINK STD (All)": sink_std_all,
+            #"SINK STD (All)": sink_std_all,
             "SINK STD (Good)": sink_std_good,
 
-            "SINK CV (All)": sink_cv_all,
+            #"SINK CV (All)": sink_cv_all,
             "SINK CV (Good)": sink_cv_good,
 
-            "Global Sink Entropy (All)": global_sink_entropy_all,
+           # "Global Sink Entropy (All)": global_sink_entropy_all,
             "Global Sink Entropy (Good)": global_sink_entropy_good,
 
-            "Sink COM Dist (All)": sink_com_dist_all,
+           # "Sink COM Dist (All)": sink_com_dist_all,
             "Sink COM Dist (Good)": sink_com_dist_good,
 
-            "Sink Switch Rate (All)": switch_rate_all,
+           # "Sink Switch Rate (All)": switch_rate_all,
             "Sink Switch Rate (Good)": switch_rate_good,
 
-            "FT-CPO Jitter (All)": ft_cpo_jitter_all,
+           # "FT-CPO Jitter (All)": ft_cpo_jitter_all,
             "FT-CPO Jitter (Good)": ft_cpo_jitter_good,
 
             # ==== A-Mat Singular Value Based Features ====
-            "H_mean": H_mean,
-            "H_std": H_std,
-            "H_min": H_min,
-            "H_max": H_max,
+            "H_SVD_mean": H_SVD_mean,
+            "H_SVD_std": H_SVD_std,
+            "H_SVD_min": H_SVD_min,
+            "H_SVD_max": H_SVD_max,
 
-            "k_log_mean":k_log_mean,
-            "k_log_std": k_log_std,
-            "k_log_min": k_log_min,
-            "k_log_max": k_log_max,
+            "SVD_ratio_mean":SVD_ratio_mean,
+            "SVD_ratio_std": SVD_ratio_std,
+            "SVD_ratio_min": SVD_ratio_min,
+            "SVD_ratio_max": SVD_ratio_max,
 
-            "svd_mean": svd_mean,
-            "svd_std": svd_std,
-            "svd_min": svd_min,
-            "svd_max": svd_max,
+            "SVD_mean": SVD_mean,
+            "SVD_std": SVD_std,
+            "SVD_min": SVD_min,
+            "SVD_max": SVD_max,
 
-            "total_AUC_mean": total_AUC_mean,
-            "total_AUC_std": total_AUC_std,
-            "total_AUC_min": total_AUC_min,
-            "total_AUC_max": total_AUC_max,
+            "SVDSum_mean": SVD_Sum_mean,
+            "SVDSum_std": SVD_Sum_std,
+            "SVDSum_min": SVD_Sum_min,
+            "SVDSum_max": SVD_Sum_max,
 
             "sing_val_diff_mean": sing_val_diff_mean,
-            "sing_val_diff_std": sing_val_diff_std
+            "sing_val_diff_std": sing_val_diff_std,
+            "sing_val_diff_min": sing_val_diff_min,
+            "sing_val_diff_max": sing_val_diff_max
         }
+
+        # ===== Append TBR metrics with prefix 'TBR_' =====
+        for k, v in TBR_metrics.items():
+            result_entry[f"TBR_{k}"] = v
+
 
         # Append log-normal features (AFTER)
         for k, v in ln_features.items():
             result_entry[f"logn_{k}"] = v
+
+        # ==================================================
+        # Append SS-map features (FLATTENED, SAFE)
+        # ==================================================
+
+        # ---------- Channel-wise ----------
+        for feat_name, feat_vals in ss_map["channel"].items():
+            feat_vals = np.asarray(feat_vals)
+
+            result_entry[f"SS_ch_{feat_name}_mean"] = float(np.mean(feat_vals))
+            result_entry[f"SS_ch_{feat_name}_std"] = float(np.std(feat_vals))
+            result_entry[f"SS_ch_{feat_name}_min"] = float(np.min(feat_vals))
+            result_entry[f"SS_ch_{feat_name}_max"] = float(np.max(feat_vals))
+
+        # ---------- Lobe-wise ----------
+        for lobe, lobe_feats in ss_map["lobe"].items():
+            for feat_name, val in lobe_feats.items():
+                result_entry[f"SS_lb_{lobe}_{feat_name}"] = float(val)
+
+        # ---------- Network-wise ----------
+        for feat_name, val in ss_map["network"].items():
+            if isinstance(val, dict):
+                for sub_name, sub_val in val.items():
+                    result_entry[f"SS_nw_{feat_name}_{sub_name}"] = float(sub_val)
+            else:
+                result_entry[f"SS_nw_{feat_name}"] = float(val)
+
+        # ============================================================
+        # Append stored Band_Pct features
+        # ============================================================
+        result_entry.update(band_pct_features)
 
         # ==================================================
         # Add this subject to batch results
@@ -2155,7 +2862,8 @@ if __name__ == "__main__":
                 all_results.extend(res)
         except Exception as e:
             # short error message and continue to next directory
-            print(f"Error processing `{DATA_PATH}`: {e}")
+            print(f"\n❌ Error processing `{DATA_PATH}`")
+            traceback.print_exc()  # <<< SHOWS EXACT LINE
             continue
 
     # ----- Final Summary -----
